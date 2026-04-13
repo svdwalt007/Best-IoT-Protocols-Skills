@@ -13,6 +13,7 @@
 8. OMA GotAPI (Generic Open Terminal API)
 9. uCIFI Smart City (LwM2M Extension)
 10. oneM2M Interworking (LwM2M IPE)
+11. OMA LwM2M Servers (Bootstrap, Registration, Management)
 
 ---
 
@@ -920,6 +921,342 @@ oneM2M: /CSE001/AE_SensorGW/Container_Temp/ContentInstance_12345
 ```
 
 **Benefits**: Allows LwM2M-native devices to participate in oneM2M ecosystems (smart city platforms, industrial IoT).
+
+---
+
+## 11. OMA LwM2M Servers (Bootstrap, Registration, Management)
+
+**Reference**: OMA LwM2M v1.2 (2020), LwM2M v2.0 (2026), LwM2M Transport Bindings
+
+**Purpose**: Lightweight M2M (LwM2M) is the de facto standard for LPWAN device management, adopted by cellular operators (NB-IoT, LTE-M), smart metering utilities, and industrial IoT platforms. It provides a complete device management framework over CoAP with significantly lower overhead than TR-069.
+
+**Three-Server Architecture**:
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                    LwM2M ECOSYSTEM                               │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌─────────────────┐      ┌──────────────────┐                  │
+│  │ LwM2M Bootstrap │      │ LwM2M Server     │                  │
+│  │ Server          │      │ (DM Server)      │                  │
+│  │                 │      │                  │                  │
+│  │ Port 5683/5684  │      │ Port 5683/5684   │                  │
+│  │ CoAP/CoAPs      │      │ CoAP/CoAPs       │                  │
+│  └────────┬────────┘      └────────┬─────────┘                  │
+│           │ Bootstrap              │ Registration               │
+│           │ (once per device)      │ (periodic)                 │
+│           │                        │                            │
+│     ┌─────▼────────────────────────▼─────┐                      │
+│     │        LwM2M Client Device         │                      │
+│     │  ┌──────────────────────────────┐  │                      │
+│     │  │ Security Object (0)          │  │                      │
+│     │  │ Server Object (1)            │  │                      │
+│     │  │ Device Object (3)            │  │                      │
+│     │  │ Connectivity Monitoring (4)  │  │                      │
+│     │  │ Firmware Update (5)          │  │                      │
+│     │  │ Location (6)                 │  │                      │
+│     │  │ + Application Objects        │  │                      │
+│     │  └──────────────────────────────┘  │                      │
+│     └────────────────────────────────────┘                      │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**Server Types and Roles**:
+
+| Server Type | Port | Role | When Used |
+|------------|------|------|-----------|
+| **Bootstrap Server** | 5683/5684 (CoAP/CoAPS) | Provisions initial security credentials and server URI list to device. Runs once per device lifecycle (factory provisioning or field bootstrap). | Zero-touch provisioning, device transfer between networks, credential rotation |
+| **Registration Server** | 5683/5684 (CoAP/CoAPS) | Primary LwM2M management server. Handles device registration, lifecycle management, firmware updates, observations, and telemetry. | Ongoing device management, configuration updates, monitoring |
+| **Application Server** | User-defined | Receives telemetry via LwM2M Observe notifications or northbound APIs from Registration Server. Not part of LwM2M spec but common deployment pattern. | Time-series databases, analytics platforms, SCADA integration |
+
+**Bootstrap Modes**:
+
+```
+1. Factory Bootstrap (embedded credentials)
+   ├─ LwM2M Client shipped with pre-configured Security Object (0)
+   ├─ Contains Bootstrap Server URI, PSK/RPK/X.509 credentials
+   └─ Device contacts Bootstrap Server on first boot
+
+2. SmartCard Bootstrap (UICC-based)
+   ├─ SIM card contains LwM2M credentials in secure storage
+   ├─ Device reads from UICC and configures Security/Server Objects
+   └─ Common in cellular IoT (NB-IoT, LTE-M)
+
+3. Server-Initiated Bootstrap
+   ├─ Device sends Bootstrap-Request to known Bootstrap Server
+   ├─ Server provisions Security (0) + Server (1) Objects via CoAP
+   └─ Used for device re-provisioning or network migration
+
+4. Client-Initiated Bootstrap (LwM2M 2.0)
+   ├─ Device discovers Bootstrap Server via DNS-SD or static config
+   ├─ Sends Bootstrap-Request with device identity
+   └─ Bootstrap Server provisions full object set
+```
+
+**Bootstrap Sequence Flow**:
+```
+LwM2M Client                  Bootstrap Server           LwM2M Server
+     │                              │                          │
+     ├─ 1. CoAP POST              ──>│                          │
+     │    /bs?ep={endpoint_name}    │                          │
+     │    (Bootstrap-Request)        │                          │
+     │                              │                          │
+     │<─ 2. 2.04 Changed (ACK)    ──┤                          │
+     │                              │                          │
+     │<─ 3. CoAP DELETE /0/0      ──┤  (Delete Security Obj 0) │
+     │<─ 4. CoAP DELETE /1/0      ──┤  (Delete Server Obj 0)   │
+     │                              │                          │
+     │<─ 5. CoAP PUT /0/0         ──┤  Write Security Object   │
+     │    {                          │  for LwM2M Server:      │
+     │      LwM2M Server URI,        │    - Server URI         │
+     │      Bootstrap Server,        │    - Security Mode (PSK)│
+     │      Security Mode,           │    - Public Key ID      │
+     │      Public Key,              │    - Secret Key         │
+     │      Secret Key               │                          │
+     │    }                          │                          │
+     │                              │                          │
+     │<─ 6. CoAP PUT /1/0         ──┤  Write Server Object:   │
+     │    {                          │    - Short Server ID=1  │
+     │      Short Server ID=1,       │    - Lifetime=86400s    │
+     │      Lifetime=86400,          │    - Binding=U (UDP)    │
+     │      Notification Storing=true│                          │
+     │    }                          │                          │
+     │                              │                          │
+     │<─ 7. CoAP POST /bs         ──┤  Bootstrap-Finish        │
+     │    (signals bootstrap done)   │                          │
+     │                              │                          │
+     ├─ 8. CoAP POST              ────────────────────────────>│
+     │    /rd?ep={endpoint}&lt=86400│       Register           │
+     │    &b=U&lwm2m=1.2            │                          │
+     │    Payload: </1/0>,</3/0>... │                          │
+     │                              │                          │
+     │<─ 9. 2.01 Created           ────────────────────────────┤
+     │    Location: /rd/aBc123      │    (Registration Success)│
+     │                              │                          │
+```
+
+**LwM2M Server Operations (CRUDN + Execute + Observe)**:
+
+| Operation | CoAP Method | LwM2M Usage | Example |
+|-----------|-------------|-------------|---------|
+| **Create** | POST | Create new Object Instance | `POST /3303` → Create new Temperature Sensor instance |
+| **Read** | GET | Read resource value(s) | `GET /3/0/0` → Read Manufacturer name |
+| **Update (Write)** | PUT | Write resource value(s) | `PUT /5/0/3` → Write Firmware Package URI |
+| **Delete** | DELETE | Delete Object Instance | `DELETE /3303/1` → Remove sensor instance 1 |
+| **Execute** | POST | Trigger action on resource | `POST /3/0/4` → Execute Reboot |
+| **Observe** | GET + Observe | Subscribe to value changes | `GET /3303/0/5700 Observe:0` → Monitor temperature |
+| **Discover** | GET + Accept: link-format | Query object/resource structure | `GET /3` → Discover Device Object resources |
+| **Write-Attributes** | PUT + query params | Set notification rules | `PUT /3303/0/5700?pmin=10&pmax=60&gt=30` |
+
+**LwM2M Object Model (Mandatory Objects)**:
+
+```
+Object ID | Object Name              | Instances | Purpose
+----------|--------------------------|-----------|------------------------------------------
+0         | Security                 | Multiple  | Bootstrap/Server credentials (PSK/RPK/X.509)
+1         | Server                   | Multiple  | Server configuration (lifetime, binding, notification)
+2         | Access Control           | Multiple  | Per-object ACLs (which server can access which objects)
+3         | Device                   | Single    | Device metadata (manufacturer, model, serial, firmware version)
+4         | Connectivity Monitoring  | Single    | Network stats (radio signal, IP address, cell ID)
+5         | Firmware Update          | Single    | FOTA state machine (package URI, update, state)
+6         | Location                 | Single    | GPS coordinates (latitude, longitude, altitude)
+7         | Connectivity Statistics  | Single    | Data usage (TX/RX bytes, SMS count)
+
+Application Objects (Examples):
+3303      | Temperature Sensor       | Multiple  | IPSO Smart Object - temperature readings
+3305      | Power Measurement        | Multiple  | Voltage, current, power factor
+3306      | Actuation                | Multiple  | On/Off control, dimmer
+3308      | Set Point                | Multiple  | Target temperature, pressure setpoints
+3313      | Accelerometer            | Multiple  | X/Y/Z axis acceleration
+3336      | Humidity Sensor          | Multiple  | Relative humidity %
+10241     | uCIFI Base Object        | Multiple  | Smart city lighting control
+10242     | uCIFI Lamp Controller    | Multiple  | LED streetlight parameters
+```
+
+**Security Object (0) Structure**:
+```
+Resource ID | Name                   | Type    | Operations | Description
+------------|------------------------|---------|------------|----------------------------
+0           | LwM2M Server URI       | String  | -          | coap://server.example.com:5683
+1           | Bootstrap Server       | Boolean | -          | true=Bootstrap, false=LwM2M Server
+2           | Security Mode          | Integer | -          | 0=PSK, 1=RPK, 2=X.509, 3=NoSec
+3           | Public Key or Identity | Opaque  | -          | PSK Identity or RPK/X.509 cert
+4           | Server Public Key      | Opaque  | -          | Server's public key (RPK/X.509)
+5           | Secret Key             | Opaque  | -          | PSK secret or private key
+6           | SMS Security Mode      | Integer | -          | 0-3 (SMS binding security)
+7           | SMS Binding Key Param  | Opaque  | -          | SMS encryption params
+8           | SMS Binding Secret Key | Opaque  | -          | SMS encryption key
+10          | Short Server ID        | Integer | -          | Unique server identifier (1-65534)
+11          | Client Hold Off Time   | Integer | -          | Delay before registration (seconds)
+12          | Bootstrap Server Account Timeout | Integer | - | Bootstrap session timeout
+```
+
+**Registration Lifecycle**:
+```
+1. REGISTER (Client → Server)
+   CoAP POST /rd?ep=device001&lt=86400&lwm2m=1.2&b=U
+   Payload (CoRE Link Format):
+   </1/0>,</3/0>,</4/0>,</5/0>,</3303/0>,</3303/1>
+
+   Server Response: 2.01 Created
+   Location-Path: /rd/aBcDeF123
+
+2. UPDATE (Client → Server, before lifetime expires)
+   CoAP POST /rd/aBcDeF123?lt=86400
+
+   Server Response: 2.04 Changed
+
+3. DE-REGISTER (Client → Server, graceful shutdown)
+   CoAP DELETE /rd/aBcDeF123
+
+   Server Response: 2.02 Deleted
+```
+
+**Firmware Update Flow (Object 5)**:
+```
+LwM2M Client                       LwM2M Server
+     │                                    │
+     │<─ 1. Write /5/0/1 (Package URI) ──┤
+     │      coap://fw.example.com/v2.bin │
+     │                                    │
+     ├─ 2. Download firmware            ──┤
+     │    (background CoAP GET)           │
+     │                                    │
+     ├─ 3. Write /5/0/3 = 1 (Downloaded)─>│
+     │    (Update State = Downloaded)     │
+     │                                    │
+     │<─ 4. Execute /5/0/2 (Update)     ──┤
+     │                                    │
+     ├─ 5. Apply firmware               ──┤
+     │    Write /5/0/3 = 2 (Updating)     │
+     │    Reboot...                       │
+     │                                    │
+     ├─ 6. Re-register (new firmware)   ─>│
+     │    Write /5/0/3 = 0 (Idle)         │
+     │    Write /3/0/3 = "v2.0.1"         │
+     │    (Firmware Version updated)      │
+     │                                    │
+```
+
+**Observe Notification with Attributes**:
+```
+Server subscribes to temperature:
+  GET /3303/0/5700 Observe:0
+  Query params: pmin=10&pmax=60&lt=25&gt=30
+
+Notification rules:
+  - pmin=10:  Minimum 10 seconds between notifications
+  - pmax=60:  Maximum 60 seconds between notifications (even if no change)
+  - lt=25:    Notify when value < 25°C (less than)
+  - gt=30:    Notify when value > 30°C (greater than)
+
+Client sends notifications:
+  CON Observe:123 2.05 Content
+  Token: 0x4A
+  Payload (TLV): 23.5
+
+  CON Observe:124 2.05 Content
+  Token: 0x4A
+  Payload (TLV): 31.2  (crossed gt=30 threshold)
+```
+
+**LwM2M 2.0 Enhancements (2026)**:
+
+| Feature | Description | Benefit |
+|---------|-------------|---------|
+| **Profile IDs** | `com.example.smart-meter.v1` - Device profiles map to pre-defined object trees | Zero-touch provisioning - server auto-configures based on device type |
+| **CBOR Encoding** | Mandatory alongside TLV/JSON | 30-40% payload reduction vs JSON |
+| **OSCORE (RFC 8613)** | Application-layer E2E encryption | Security through untrusted intermediaries (concentrators) |
+| **Composite Operations** | `ReadComposite(/3/0/0,/3/0/1,/5/0/3)` | Single request for multiple resources - reduces round-trips |
+| **Enhanced Bootstrap** | Profile ID in Bootstrap-Request | Server selects provisioning template based on device class |
+| **eSIM Support (Object 504)** | GSMA SGP.32/33 remote SIM provisioning | OTA carrier switching for cellular devices |
+| **Gateway Objects (25, 26)** | LwM2M Gateway + Routing Objects | Proxy non-IP devices (Modbus, Zigbee) through LwM2M gateway |
+
+**LwM2M Server Implementations**:
+
+| Implementation | Type | Language | Key Features | Use Case |
+|----------------|------|----------|--------------|----------|
+| **Eclipse Leshan** | Open Source | Java | Bootstrap + Registration servers, web UI, Redis persistence | Development, testing, small deployments |
+| **AVSystem Coiote** | Commercial | C++ | Carrier-grade, multi-tenant, LwM2M 1.0-2.0, OMA CTT certified | Telco/MNO device management, smart metering |
+| **Friendly Technologies One-IoT** | Commercial | Java/C++ | LwM2M + TR-369 unified, eSIM (Object 504), smart grid focus | Utility smart metering, broadband gateways |
+| **Thingstream (U-blox)** | Cloud SaaS | Managed | MQTT-SN bridge, location services, cellular connectivity | Asset tracking, LPWAN devices |
+| **IoTerop ALASKA** | Commercial | C | Embedded LwM2M server, on-premise or cloud | Industrial IoT, private networks |
+| **Anjay (AVSystem)** | Open Source Client | C | LwM2M 1.0-1.2 client library | Device firmware integration |
+| **Wakaama (Eclipse)** | Open Source Client | C | LwM2M 1.0/1.1 reference implementation | Embedded devices, PoC |
+
+**Transport Bindings**:
+
+| Binding | Protocol | Port | Use Case |
+|---------|----------|------|----------|
+| **U** | CoAP over UDP | 5683 (CoAP), 5684 (CoAPs) | Default for NB-IoT, Wi-Fi, Ethernet |
+| **T** | CoAP over TCP | 5683, 5684 | Firewalled networks requiring TCP |
+| **S** | CoAP over SMS | - | Extreme coverage (2G fallback), configuration updates |
+| **N** | CoAP over Non-IP (NIDD) | - | 3GPP CIoT Non-IP Data Delivery (NB-IoT optimization) |
+| **Q** | CoAP over MQTT | 1883, 8883 | LwM2M-over-MQTT for existing MQTT infrastructure |
+
+**Real-World Deployments**:
+
+```
+1. NB-IoT Smart Metering (Europe)
+   ├─ Landis+Gyr E360 meters → LwM2M 1.2 (CBOR)
+   ├─ Diehl IZAR RMU → LwM2M + DLMS/COSEM hybrid
+   ├─ AVSystem Coiote DMP (Deutsche Telekom, Orange)
+   └─ 15M+ devices under management
+
+2. Asset Tracking (Logistics)
+   ├─ U-blox SARA-R5 modules → Thingstream LwM2M cloud
+   ├─ LwM2M Object 6 (Location) + 3336 (Humidity) + 3313 (Accelerometer)
+   └─ LTE-M Cat-M1 connectivity
+
+3. Smart Cities (uCIFI)
+   ├─ Philips CityTouch streetlights → LwM2M Object 10241/10242
+   ├─ 500K+ streetlights across France, Netherlands, Dubai
+   └─ AVSystem Coiote + city-specific application servers
+
+4. Industrial IoT Gateway (Modbus → LwM2M)
+   ├─ Friendly One-IoT Gateway → LwM2M Object 25 (Gateway), 26 (Routing)
+   ├─ Virtualizes 50K Modbus devices as LwM2M endpoints
+   └─ Profile ID auto-provisioning for device classes
+```
+
+**Security Considerations**:
+
+```
+1. DTLS 1.2/1.3 with PSK/RPK/X.509
+   ├─ Pre-Shared Key (PSK): Embedded secret, low overhead
+   ├─ Raw Public Key (RPK): ECDSA certificates without CA chain
+   └─ X.509: Full PKI, enterprise deployments
+
+2. OSCORE (LwM2M 2.0)
+   ├─ Application-layer encryption (survives proxy/concentrator)
+   ├─ AES-CCM-16-64-128 (COSE AEAD)
+   └─ Sequence number replay protection
+
+3. Access Control (Object 2)
+   ├─ Per-object ACLs: Server 1 can Read /3, Server 2 can Write /5
+   └─ Multi-server deployments (bootstrap + primary + backup)
+
+4. Bootstrap Security
+   ├─ Bootstrap Server holds master credentials
+   ├─ Provisions unique per-device keys to LwM2M Server
+   └─ Rotation: Device re-bootstraps to update credentials
+```
+
+**Comparison: LwM2M vs TR-069 vs OMA DM**:
+
+| Feature | LwM2M | TR-069 | OMA DM |
+|---------|-------|--------|--------|
+| Transport | CoAP/UDP (binary) | SOAP/HTTP/TLS (XML) | HTTP/OBD-C (XML) |
+| Overhead | 30-50 bytes/message | 500-1000 bytes/message | 200-400 bytes/message |
+| Target | LPWAN, NB-IoT, constrained | Broadband gateways, CPE | Mobile phones, tablets |
+| Object Model | Numeric IDs (3303/0/5700) | Hierarchical paths (Device.Temp.1.Value) | Tree structure (./DevDetail/SwV) |
+| Bootstrap | Dedicated Bootstrap Server | ACS URL + credentials | Bootstrap DM server |
+| Firmware Update | Object 5 (state machine) | Download RPC + TransferComplete | FUMO (Firmware Update MO) |
+| Observe | Native (CoAP Observe) | Active Notification + STUN | DM Notifications |
+| Market | IoT (metering, industrial, tracking) | Broadband (DSL, fiber, cable) | Mobile devices (legacy) |
+
+Cross-reference: [lpwan.md](lpwan.md) section 1 (LwM2M core protocol, object model).
 
 ---
 

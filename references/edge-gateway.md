@@ -11,6 +11,8 @@
 6. OPC UA PubSub (TSN/MQTT Bindings)
 7. KNX IoT (KNX-to-IP Bridging)
 8. LwM2M Gateway Patterns
+9. Protocol Adapter Architecture (Multi-Protocol Gateway Design)
+10. Extended Gateway Protocol Coverage
 
 ---
 
@@ -774,17 +776,765 @@ Cross-reference: [lpwan.md](lpwan.md) section 1 (LwM2M core protocol).
 
 ---
 
+## 9. Protocol Adapter Architecture (Multi-Protocol Gateway Design)
+
+**Reference**: Inspired by ThingsBoard Gateway, Friendly One-IoT Gateway, EdgeX Device Services
+
+**Purpose**: Modern IoT edge gateways must aggregate data from heterogeneous field devices speaking incompatible protocols (Modbus RTU, BACnet, OPC UA, DLMS/COSEM, etc.) and translate to a unified northbound protocol (LwM2M, MQTT, HTTP). This section covers the canonical architecture pattern for multi-protocol adapter frameworks.
+
+**Layered Adapter Architecture**:
+```
+┌───────────────────────────────────────────────────────────────────┐
+│                    NORTHBOUND (Cloud/Platform)                     │
+│  ┌─────────────────────────────────────────────────────────────┐  │
+│  │  Unified Protocol Layer                                     │  │
+│  │    ├─ LwM2M 2.0 (CoAP/CBOR) - Objects 25 (Gateway), 26 (Routing)│
+│  │    ├─ MQTT + Sparkplug B (protobuf payload)               │  │
+│  │    ├─ HTTP/REST (JSON API)                                │  │
+│  │    └─ AMQP 1.0 (Eclipse Hono integration)                 │  │
+│  └─────────────────────────────────────────────────────────────┘  │
+├───────────────────────────────────────────────────────────────────┤
+│                    GATEWAY CORE SERVICES                          │
+│  ┌──────────────────┐ ┌──────────────────┐ ┌─────────────────┐   │
+│  │ Device Registry  │ │ Schema Registry  │ │ Command Router  │   │
+│  │  (Device Twin)   │ │  (Profile IDs)   │ │  (Fan-out)      │   │
+│  └──────────────────┘ └──────────────────┘ └─────────────────┘   │
+│  ┌──────────────────┐ ┌──────────────────┐ ┌─────────────────┐   │
+│  │ Normalisation    │ │ Payload Codec    │ │ Offline Buffer  │   │
+│  │  (Protocol→LwM2M)│ │  (CBOR/JSON/TLV) │ │  (Store-forward)│   │
+│  └──────────────────┘ └──────────────────┘ └─────────────────┘   │
+│  ┌──────────────────────────────────────────────────────────────┐│
+│  │ Virtual Endpoint Manager (LwM2M 2.0)                        ││
+│  │  - Object 25 (Gateway): Single gateway identity            ││
+│  │  - Object 26 (Routing): Per-device routing table           ││
+│  │  - Profile ID Framework: Device class auto-provisioning    ││
+│  └──────────────────────────────────────────────────────────────┘│
+├───────────────────────────────────────────────────────────────────┤
+│                    PROTOCOL ADAPTERS (Southbound)                 │
+│  ┌────────────────┐ ┌────────────────┐ ┌────────────────┐        │
+│  │ MQTT Adapter   │ │ OPC UA Adapter │ │ Modbus Adapter │        │
+│  │  Port 1883     │ │  Port 4840     │ │  RTU/TCP       │        │
+│  └────────────────┘ └────────────────┘ └────────────────┘        │
+│  ┌────────────────┐ ┌────────────────┐ ┌────────────────┐        │
+│  │ BACnet Adapter │ │ DLMS Adapter   │ │ ANSI C12 Adptr │        │
+│  │  Port 47808    │ │  HDLC/TCP      │ │  Optical/TCP   │        │
+│  └────────────────┘ └────────────────┘ └────────────────┘        │
+│  ┌────────────────┐ ┌────────────────┐ ┌────────────────┐        │
+│  │ Wi-SUN Adapter │ │ Wi-MBus Adptr  │ │ DNP3 Adapter   │        │
+│  │  6LoWPAN/RPL   │ │  EN 13757-4    │ │  TCP/Serial    │        │
+│  └────────────────┘ └────────────────┘ └────────────────┘        │
+└───────────────────────────────────────────────────────────────────┘
+                              │
+                   ┌──────────▼──────────┐
+                   │  Field Device Layer │
+                   │  (Sensors, Meters,  │
+                   │   PLCs, Actuators)  │
+                   └─────────────────────┘
+```
+
+**Adapter Lifecycle State Machine**:
+```
+┌──────────────────────────────────────────────────────────────┐
+│               ADAPTER LIFECYCLE STATES                       │
+├──────────────────────────────────────────────────────────────┤
+│                                                              │
+│  ┌───────────┐   ┌───────────┐   ┌──────────┐              │
+│  │ INSTALLED ├──>│ CONFIGURED├──>│ CONNECTED│              │
+│  └───────────┘   └───────────┘   └─────┬────┘              │
+│                                         │                   │
+│                                    ┌────▼────┐              │
+│                                    │ RUNNING │              │
+│                                    └────┬────┘              │
+│                                         │                   │
+│                          ┌──────────────┼──────────────┐    │
+│                          │              │              │    │
+│                     ┌────▼─────┐  ┌─────▼────┐  ┌─────▼────┐
+│                     │ POLLING  │  │ LISTENING│  │ OBSERVING│
+│                     │ (active) │  │ (passive)│  │ (subscr.)│
+│                     └────┬─────┘  └─────┬────┘  └─────┬────┘
+│                          │              │              │    │
+│                          └──────────────┼──────────────┘    │
+│                                         │                   │
+│                                    ┌────▼────┐              │
+│                                    │DRAINING │              │
+│                                    │ (flush) │              │
+│                                    └────┬────┘              │
+│                                         │                   │
+│                                    ┌────▼────┐              │
+│                                    │ STOPPED │              │
+│                                    └─────────┘              │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Virtual Endpoint Lifecycle (LwM2M 2.0 Gateway Pattern)**:
+```
+Each discovered field device gets a virtual LwM2M endpoint:
+
+DISCOVERED → PROFILING → BOOTSTRAPPING → REGISTERING → ACTIVE
+    ↑              │              │              │           │
+    │              └──────────────┴──────────────┴───────────┤
+    │                     (Error recovery loop)              │
+    └────────────────────────────────────────────────────────┘
+
+State Descriptions:
+├─ DISCOVERED:      Adapter detects device on field network
+│                   (Modbus scan response, OPC UA browse, MQTT connect)
+│
+├─ PROFILING:       Resolve Profile ID from {protocol, device_model}
+│                   Example: "Modbus + Landis+Gyr E350" → "com.lg.e350.modbus.v1"
+│                   Construct LwM2M object tree from profile template
+│
+├─ BOOTSTRAPPING:   Provision security credentials via LwM2M Bootstrap
+│                   DTLS/OSCORE context established per virtual endpoint
+│
+├─ REGISTERING:     LwM2M Register to DMP Server with lifetime, binding, object list
+│                   Object 26 routing entry created (maps endpoint → adapter)
+│
+└─ ACTIVE:          Device operational - REPORTING, COMMANDED, OBSERVED sub-states
+                    - REPORTING: Periodic telemetry (pmin/pmax attributes)
+                    - COMMANDED: Processing SET/EXECUTE from DMP
+                    - OBSERVED: Active CoAP Observe subscription
+```
+
+**Profile ID Framework**:
+```yaml
+# Device Profile CRD (Kubernetes Custom Resource)
+apiVersion: gateway.iot.example.com/v1alpha1
+kind: DeviceProfile
+metadata:
+  name: landis-gyr-e350-modbus
+spec:
+  profileId: "com.landis-gyr.e350.modbus.v1"
+  lwm2mVersion: "2.0"
+  protocol: modbus-tcp
+
+  # Device identification rules
+  deviceMatchers:
+    - field: holding_register_40050  # Manufacturer ID
+      value: "0x4C47"                # "LG" = Landis+Gyr
+    - field: holding_register_40051  # Model register
+      value: "0xE350"
+
+  # LwM2M encoding
+  encoding: CBOR  # Primary: CBOR (30-40% smaller), fallback: JSON
+
+  # LwM2M object tree template
+  objectTree:
+    - objectId: 3          # Device Object
+      resources: [0, 1, 2, 3, 17]  # Manufacturer, Model, Serial, FW Ver, Device Type
+    - objectId: 3316       # Generic Sensor (Energy Meter)
+      instances: auto       # One per meter channel
+      resources: [5700, 5701, 5601, 5602]  # Sensor Value, Unit, Min/Max
+    - objectId: 4          # Connectivity Monitoring
+      resources: [0, 1, 4, 8]  # Network Bearer, Available Network Bearer, IP Addresses
+
+  # Modbus → LwM2M mapping rules
+  mappings:
+    - source_register: "40001-40002"  # 2 registers = 32-bit float
+      decode: float32_big_endian
+      scale_factor: 0.01
+      unit: "kWh"
+      target_lwm2m:
+        object_id: 3316
+        instance_id: 0
+        resource_id: 5700  # Sensor Value
+        resource_type: float
+      notification_attrs:
+        pmin: 30   # Min 30s between notifications
+        pmax: 300  # Max 5 min between notifications
+        edge: false  # Not edge-triggered
+```
+
+**Message Flow (Device → Cloud)**:
+```
+Field Device (Modbus)          Adapter             Gateway Core         LwM2M Server
+      │                          │                      │                     │
+      │<─ Modbus Read Holding ──┤ Poll on schedule     │                     │
+      │   Registers 40001-40002  │ (e.g., every 60s)   │                     │
+      │                          │                      │                     │
+      ├─ Response: 0x42480000  ─>│ (42.48 kWh as IEEE) │                     │
+      │   (32-bit float BE)      │                      │                     │
+      │                          │                      │                     │
+      │                          ├─ Normalise ────────>│                     │
+      │                          │  {                   │                     │
+      │                          │    protocol: modbus, │                     │
+      │                          │    endpoint: meter001│                     │
+      │                          │    profile_id: ...   │                     │
+      │                          │    lwm2m_objects: [  │                     │
+      │                          │      {obj:3316, inst:0, res:5700, val:42.48}│
+      │                          │    ]                 │                     │
+      │                          │  }                   │                     │
+      │                          │                      │                     │
+      │                          │                      ├─ CBOR encode ─────>│
+      │                          │                      │ CoAP NOTIFY        │
+      │                          │                      │ /3316/0/5700       │
+      │                          │                      │ Observe: 123       │
+      │                          │                      │ Payload (CBOR):    │
+      │                          │                      │   0xFA422C0000     │
+      │                          │                      │   (42.48 as CBOR)  │
+```
+
+**Command Flow (Cloud → Device)**:
+```
+LwM2M Server              Gateway Core            Adapter            Field Device
+      │                         │                    │                     │
+      ├─ CoAP PUT /3306/0/5850 ─>│ Write resource    │                     │
+      │   Payload: true          │ (turn on actuator)│                     │
+      │                         │                    │                     │
+      │                         ├─ Lookup routing  ──┤                     │
+      │                         │  Object 26 entry   │                     │
+      │                         │  endpoint → adapter│                     │
+      │                         │                    │                     │
+      │                         ├─ Command ────────>│ Translate to       │
+      │                         │  {                 │ native protocol    │
+      │                         │    target: valve01,│                     │
+      │                         │    operation: WRITE│                     │
+      │                         │    resource: on/off│                     │
+      │                         │    value: true     │                     │
+      │                         │  }                 │                     │
+      │                         │                    │                     │
+      │                         │                    ├─ Modbus Write ────>│
+      │                         │                    │  Coil 0x0001 = ON  │
+      │                         │                    │                     │
+      │                         │                    │<─ Response: OK ────┤
+      │                         │                    │                     │
+      │                         │<─ ACK ─────────────┤                     │
+      │<─ 2.04 Changed ──────────┤                    │                     │
+```
+
+**Composite Operations (LwM2M 1.2+)**:
+```
+Single request for multiple resources across objects:
+
+READ-COMPOSITE:
+  CoAP POST /dp (composite read path)
+  Content-Format: SenML JSON
+  Payload:
+  [
+    {"bn":"/3/0/", "n":"0"},      # Device Manufacturer
+    {"bn":"/3/0/", "n":"1"},      # Device Model
+    {"bn":"/3316/0/", "n":"5700"}, # Sensor Value
+    {"bn":"/3316/1/", "n":"5700"}  # Sensor Value (instance 1)
+  ]
+
+Gateway scatter-gather:
+  1. Parse SenML path list
+  2. Group by backing adapter and physical device
+  3. Issue parallel protocol-native bulk reads:
+     - Modbus multi-register read (FC 0x03)
+     - OPC UA ReadValueId[] array
+     - BACnet ReadPropertyMultiple
+  4. Assemble SenML-CBOR response
+  5. Return composite response to DMP
+
+Benefits: 4 round-trips → 1 round-trip (75% reduction)
+```
+
+**Data Encoding Strategy**:
+```
+┌────────────────────────────────────────────────────────────┐
+│            CANONICAL MESSAGE FORMAT (Internal)             │
+├────────────────────────────────────────────────────────────┤
+│  All adapters produce this format after normalisation:     │
+│                                                            │
+│  {                                                         │
+│    "schema_version": "2.0",                                │
+│    "tenant_id": "utility-abc",                             │
+│    "device_id": "meter-12345",                             │
+│    "endpoint_name": "meter-12345.utility-abc.lwm2m",       │
+│    "profile_id": "com.landis-gyr.e350.modbus.v1",          │
+│    "lwm2m_version": "2.0",                                 │
+│    "source_protocol": "modbus-tcp",                        │
+│    "timestamp_utc": "2024-01-15T10:30:00Z",                │
+│    "operation": "REPORT",                                  │
+│    "lwm2m_objects": [                                      │
+│      {                                                     │
+│        "object_id": 3316,                                  │
+│        "object_instance": 0,                               │
+│        "resource_id": 5700,                                │
+│        "resource_value": 42.48,                            │
+│        "resource_type": "float",                           │
+│        "encoding": "CBOR"                                  │
+│      }                                                     │
+│    ],                                                      │
+│    "notification_attrs": {                                 │
+│      "pmin": 30, "pmax": 300                               │
+│    },                                                      │
+│    "security_context": {                                   │
+│      "transport_security": "DTLS_1_3",                     │
+│      "cipher_suite": "TLS_AES_128_GCM_SHA256",             │
+│      "oscore_context_id": "abc123"                         │
+│    }                                                       │
+│  }                                                         │
+│                                                            │
+│  → Internal event bus (NATS JetStream): CBOR-encoded      │
+│  → Northbound to LwM2M Server: CoAP + CBOR payload        │
+│  → Debug/diagnostic endpoints: JSON (human-readable)      │
+└────────────────────────────────────────────────────────────┘
+```
+
+**Offline Buffering & Store-Forward**:
+```
+Gateway loses connectivity to LwM2M Server:
+  ↓
+1. Adapter continues polling devices, events flow to buffer-service
+2. Buffer persists to local storage (Redis + disk WAL)
+3. Configurable buffer depth: 1M messages per adapter
+4. Overflow policy: drop oldest (FIFO) or reject new (back-pressure)
+5. Metadata preserved: original timestamp, sequence number, device endpoint
+
+Gateway reconnects:
+  ↓
+6. Buffer replays messages in original order
+7. LwM2M Register + full object tree (catch-up)
+8. NDATA/DDATA messages with historical flag
+9. Server applies messages to device twin with original timestamps
+
+At-least-once delivery semantics (idempotency via message UUID)
+```
+
+**Security Layers**:
+```
+Southbound (Device-facing):
+  ├─ Per-protocol security:
+  │  ├─ Modbus: VPN overlay (no native security)
+  │  ├─ OPC UA: Security Policies (Basic256Sha256, Aes128-Sha256-RsaOaep)
+  │  ├─ MQTT: TLS 1.3 + username/password or X.509 client certs
+  │  ├─ DLMS/COSEM: HLS-GMAC authentication (DLMS v8)
+  │  ├─ BACnet: BACnet/SC (Secure Connect) - TLS 1.3 + X.509
+  │  └─ DNP3: Secure Authentication v5 (SAv5) - HMAC-SHA256
+  │
+  ├─ Hardware Root of Trust (optional):
+  │  └─ Secure Element / TPM for private key storage (non-extractable)
+
+Internal Service Mesh:
+  ├─ mTLS between all microservices (Istio/Linkerd)
+  ├─ SPIFFE/SPIRE workload identity
+  └─ Network policy: deny-all default, explicit allow per service pair
+
+Northbound (LwM2M Server):
+  ├─ DTLS 1.3 (primary): TLS_AES_128_GCM_SHA256, TLS_CHACHA20_POLY1305_SHA256
+  ├─ DTLS 1.2 (fallback)
+  ├─ OSCORE (RFC 8613): Application-layer E2E through untrusted proxies
+  │  ├─ AEAD: AES-CCM-16-64-128 (COSE)
+  │  ├─ Sender/Recipient ID: derived from endpoint name + context ID
+  │  └─ Replay protection: sequence number tracking (persisted in Redis)
+  │
+  └─ Authentication modes:
+     ├─ PSK (Pre-Shared Key): Low overhead, embedded secret
+     ├─ RPK (Raw Public Key): ECDSA without CA chain
+     └─ X.509: Full PKI for enterprise deployments
+```
+
+**Observability (OpenTelemetry)**:
+```
+Metrics (Prometheus):
+  ├─ Per-adapter: msg/sec, error rate, latency histogram, connected devices
+  ├─ Virtual endpoints: count, state distribution (ACTIVE, DRAINING, ERROR)
+  ├─ Buffer: depth, overflow events, replay lag
+  ├─ CBOR compression ratio vs JSON baseline
+  ├─ DTLS handshake success rate, session resumption rate
+  └─ OSCORE: context establishment rate, replay rejection count
+
+Traces (Jaeger/Tempo):
+  ├─ Full distributed trace per message (adapter → core → DMP)
+  ├─ Trace ID propagated through all services
+  ├─ OSCORE context ID in trace metadata for E2E correlation
+  └─ Spans: adapter.poll, normalise, encode, transmit, ack
+
+Logs (Loki/Elasticsearch):
+  ├─ Structured JSON logs (timestamp, level, service, trace_id, message)
+  └─ Log aggregation with trace correlation
+
+Alerts (Alertmanager):
+  ├─ Adapter disconnect (> 5 min)
+  ├─ Buffer overflow (depth > 90%)
+  ├─ Error rate > 1%
+  ├─ Certificate expiry < 30 days
+  └─ Virtual endpoint churn > 5% (devices rapidly connecting/disconnecting)
+```
+
+**Deployment Models**:
+```
+1. Edge Gateway (Docker Compose)
+   ├─ Single-node, on-premise deployment
+   ├─ Industrial gateway hardware (ARM/x86)
+   ├─ Local SQLite/PostgreSQL for device registry
+   └─ Use case: Factory floor, substation, building controller
+
+2. Kubernetes Cluster (Cloud/Hybrid)
+   ├─ Multi-tenant, carrier-grade
+   ├─ Horizontal Pod Autoscaling (HPA) per adapter type
+   ├─ PodDisruptionBudget for rolling updates
+   ├─ StatefulSet for buffer-service (persistent volumes)
+   ├─ Helm chart with CRDs (ProtocolAdapter, DeviceProfile, VirtualEndpoint)
+   └─ Use case: Telco DMP, smart city platform, utility head-end system
+
+3. Edge Kubernetes (K3s/MicroK8s)
+   ├─ Lightweight Kubernetes for edge devices
+   ├─ Reduced resource footprint (512MB RAM minimum)
+   └─ Use case: Industrial IoT gateway clusters, distributed deployments
+```
+
+**Use Cases**:
+```
+1. Smart Metering (LwM2M 2.0 Gateway + Modbus)
+   ├─ 50,000 Modbus RTU meters (Landis+Gyr, Itron, Elster)
+   ├─ Profile ID auto-provisioning per meter model
+   ├─ Gateway Object 25 (identity) + Object 26 (routing table)
+   ├─ CBOR encoding → 30% bandwidth reduction vs JSON
+   └─ AVSystem Coiote DMP (Deutsche Telekom, Orange)
+
+2. Industrial SCADA (OPC UA + Modbus + DNP3)
+   ├─ OPC UA PLCs (Siemens S7-1500, Allen-Bradley ControlLogix)
+   ├─ Modbus RTUs (legacy RTUs, power meters)
+   ├─ DNP3 outstations (SCADA field devices)
+   ├─ Sparkplug B northbound (MQTT to historian)
+   └─ Unified namespace: spBv1.0/Factory1/NDATA/Gateway1
+
+3. Building Automation (BACnet + KNX + Modbus)
+   ├─ BACnet/IP HVAC controllers
+   ├─ KNX lighting/blinds (via KNX IoT Point API)
+   ├─ Modbus energy meters
+   ├─ Azure IoT Edge northbound (cloud analytics)
+   └─ EdgeX Foundry device services framework
+
+4. Smart City (Multi-Protocol + uCIFI)
+   ├─ DALI-2 streetlights (IEC 62386)
+   ├─ LoRaWAN environmental sensors
+   ├─ BLE asset trackers (parking sensors, waste bins)
+   ├─ LwM2M Object 10241/10242 (uCIFI streetlight control)
+   └─ Eclipse Hono multi-tenant gateway
+```
+
+---
+
+## 10. Extended Gateway Protocol Coverage
+
+**Purpose**: Comprehensive protocol adapter inventory covering building automation, agriculture, automotive, and industrial IoT verticals. Based on market coverage analysis identifying gaps in existing edge gateway platforms.
+
+### 10.1 Building Automation Protocols
+
+**DALI-2 / DALI+ (IEC 62386)** — Digital Addressable Lighting Interface:
+```
+Purpose: Commercial lighting control (LED drivers, luminaires, emergency lighting)
+Market:  Dominant in modern commercial buildings (>60% of installations)
+
+Architecture:
+  ┌─────────────────┐      ┌──────────────────┐      ┌─────────────────┐
+  │  DALI Gateway   │ 2-wire│  DALI Devices   │      │ BMS Integration │
+  │  (Bus Master)   │──────>│  (Ballasts, LED  │<────>│ (BACnet/KNX)    │
+  │  USB/Ethernet   │ bus   │   Drivers, Sensors)     │                 │
+  └─────────────────┘       └──────────────────┘      └─────────────────┘
+
+Addressing:
+  - 64 short addresses per bus (0-63)
+  - 16 groups (scene control)
+  - Broadcast address (254)
+
+Commands (8-bit frames, Manchester encoding, 1200 baud):
+  ├─ DAPC (Direct Arc Power Control): Set brightness 0-254
+  ├─ OFF / UP / DOWN / STEP UP / STEP DOWN
+  ├─ GO TO SCENE (16 scenes per device)
+  ├─ QUERY STATUS / QUERY LAMP FAILURE
+  └─ STORE DTR AS FADE TIME (color control DT8)
+
+DALI-2 Enhancements:
+  - Device Type 8 (DT8): Color control (tunable white, RGB, RGBW)
+  - Event-based push notifications (motion detection, daylight sensing)
+  - Extended memory banks (fault logs, energy consumption)
+
+Gateway Mapping:
+  DALI Device Address 12 → LwM2M Object 3311 (Light Control)
+    ├─ /3311/0/5850 (On/Off) ← DALI OFF/ON command
+    ├─ /3311/0/5851 (Dimmer) ← DALI DAPC 0-254 → 0-100%
+    └─ /3311/0/5706 (Color) ← DALI DT8 color commands
+```
+
+**LonWorks / LonTalk (EN 14908)** — Legacy BAS:
+```
+Purpose: Legacy BAS protocol (1995-2015 era), 15% of global installed base
+Market:  North American retrofit, Honeywell/Siemens/Johnson Controls estates
+
+Architecture:
+  - Neuron chip (discontinued by Renesas → driving gateway demand)
+  - Network Variables (NVs): Published/subscribed data points
+  - LNS (LonWorks Network Services): Configuration database
+
+Challenges:
+  - Complex protocol stack (7 layers)
+  - SNVT/UNVT data types (standard/user network variable types)
+  - LNS database integration for NV bindings
+
+Gateway Strategy:
+  - Use open-source LON stacks (lon4linux)
+  - Map NVs to LwM2M objects via configuration
+  - Translate LonTalk frames to BACnet/IP or LwM2M for cloud integration
+```
+
+**EnOcean (ISO 14543-3-1X)** — Energy Harvesting Wireless:
+```
+Purpose: Battery-free sensors (occupancy, temperature, switches)
+Market:  Green buildings, LEED certifications, 5000+ products
+
+Radio: 868 MHz (EU), 902 MHz (US), 315 MHz (Asia)
+Energy Harvesting:
+  ├─ Solar cells (light switches)
+  ├─ Piezo generators (push buttons)
+  ├─ Thermoelectric (temperature differential)
+  └─ Electromagnetic (motion)
+
+EnOcean Equipment Profiles (EEPs):
+  - A5-02-05: Temperature sensor (0-40°C, 0.1°C resolution)
+  - A5-07-01: Occupancy sensor with illumination
+  - D2-01-12: Electronic switches and dimmers
+  - D2-14-41: Multi-sensor (temp, humidity, illumination, motion)
+
+Gateway Integration:
+  USB receiver (TCM310, ESP3 protocol) → Parse telegrams → LwM2M Object 3303/3304
+```
+
+### 10.2 Agriculture Protocols
+
+**SDI-12 (Serial Data Interface at 1200 Baud)**:
+```
+Purpose: Environmental/soil sensors (THE standard for precision agriculture)
+Market:  Every major soil sensor manufacturer (Meter Group, Campbell Scientific)
+
+Physical:
+  - 2-wire bus (data + ground), max 60m
+  - 1200 baud, 7-bit ASCII
+  - Daisy-chain up to 10+ sensors per bus
+
+Command/Response:
+  aM!     → Start measurement on sensor 'a', get number of values + wait time
+  aD0!    → Retrieve measurement values (CSV format)
+  aI!     → Identify sensor (manufacturer, model, version, serial)
+
+Example Session:
+  Gateway → 0M!      (Measure command to sensor address 0)
+  Sensor  → 0014     (14 seconds until measurement ready, 0 values immediately)
+  [Wait 14 seconds]
+  Gateway → 0D0!     (Retrieve data)
+  Sensor  → 0+23.5+45.2+1.234  (Temperature °C, Humidity %, EC mS/cm)
+
+Gateway Mapping:
+  SDI-12 Sensor 0 → LwM2M Object 3303 (Temperature) + 3304 (Humidity) + 3327 (EC)
+```
+
+**ISOBUS (ISO 11783)** — Farm Machinery CAN:
+```
+Purpose: Precision farming (tractors, implements, seeders, sprayers)
+Market:  Managed by AEF (Agricultural Industry Electronics Foundation)
+
+Based on: CAN 2.0B (250 kbps) + J1939 transport layer
+Key Subsystems:
+  ├─ Task Controller (TC): Prescription maps, variable rate application
+  ├─ Virtual Terminal (VT): Tractor display protocol
+  ├─ Working Set Management: Implement discovery and address claiming
+  └─ Data logging: Section control, yield monitoring
+
+PGNs (Parameter Group Numbers):
+  - PGN 65267: Vehicle Position (GPS latitude, longitude, altitude)
+  - PGN 65215: Wheel-Based Speed and Distance
+  - PGN 64734: Product Control (application rate, section on/off)
+
+Gateway Requirements:
+  - SocketCAN on Linux (CAN interface)
+  - ISO 11783 stack (commercial: AGCO CCI-A3, open-source: ISOBUS++)
+  - Map PGNs to LwM2M Object 6 (Location) + 3336 (Humidity) + custom app objects
+```
+
+**BLE 5.x (Bluetooth Low Energy)** — Livestock/Sensor Beacons:
+```
+Use Cases:
+  - Animal tracking (ear tags, collar sensors)
+  - Greenhouse micro-sensor networks
+  - Soil sensor beacons
+  - Irrigation valve controllers
+
+BLE Features:
+  - BLE 5.0: 2x speed (2 Mbps), 4x range (240m outdoor)
+  - BLE 5.1: Direction finding (AoA/AoD for asset location)
+  - BLE Mesh: Many-to-many relay (extends range)
+
+GATT Profiles:
+  - Environmental Sensing Service (0x181A): Temperature, humidity, pressure
+  - Device Information Service (0x180A): Manufacturer, model, firmware version
+  - Battery Service (0x180F): Battery level %
+
+Gateway Pattern:
+  BLE Central (gateway) scans for advertising devices
+  → Connects to GATT server
+  → Subscribes to characteristic notifications
+  → Maps to LwM2M Object 3303 (Temperature), 3304 (Humidity), 3320 (Battery)
+```
+
+**4-20mA Analog Current Loop** — Industrial Sensors:
+```
+Purpose: Industry-standard analog interface (soil probes, flow meters, pressure)
+Signal:  4 mA = 0% (zero scale), 20 mA = 100% (full scale)
+
+Gateway Hardware:
+  - ADC module (16-bit resolution recommended)
+  - 250Ω precision resistor (converts current to voltage: 1-5V)
+  - Calibration per channel (offset, gain)
+
+Mapping:
+  ADC Channel 0 (4-20mA soil moisture) → LwM2M Object 3304 Instance 0
+  Formula: moisture_% = ((I_mA - 4) / 16) * 100
+```
+
+### 10.3 Automotive / Fleet Telematics Protocols
+
+**SAE J1939** — Heavy-Duty Vehicle CAN:
+```
+Purpose: Commercial trucks, buses, construction equipment (THE protocol)
+Market:  Every fleet telematics platform (Geotab, Samsara, Trimble)
+
+CAN Physical:
+  - 250 kbps or 500 kbps
+  - 29-bit extended CAN identifiers
+  - 1000+ Parameter Group Numbers (PGNs)
+
+Key PGNs:
+  - PGN 61444: Engine Speed (RPM)
+  - PGN 65265: Cruise Control/Vehicle Speed
+  - PGN 65266: Fuel Economy
+  - PGN 65276: Dash Display (odometer, fuel level, coolant temp)
+  - PGN 65226: Active Diagnostic Trouble Codes (DTCs)
+  - DM1/DM2: Diagnostic messages (active/previously active faults)
+
+Transport Protocol:
+  - BAM (Broadcast Announce Message): One-to-many (max 1785 bytes)
+  - CMDT (Connection Mode Data Transfer): Point-to-point with flow control
+
+Gateway Architecture:
+  SocketCAN + J1939 decoder library → Parse PGNs
+  → Map to LwM2M Objects:
+    - 3336 (Generic Sensor) for engine RPM, fuel rate
+    - 3337 (Fuel Level)
+    - 3338 (Vehicle Diagnostics) for DTCs
+```
+
+**FMS Standard (Fleet Management Systems — ACEA)**:
+```
+Purpose: European standardized subset of J1939 for truck telematics
+Defined by: ACEA (European Automobile Manufacturers Association)
+
+Difference from J1939:
+  - Controlled, OEM-approved interface (no proprietary CAN access)
+  - Dedicated CAN bus or FMS gateway
+  - Subset of PGNs: fuel, speed, distance, engine hours, PTO status
+
+OEMs Supporting FMS:
+  MAN, DAF, Volvo, Scania, Iveco, Mercedes-Benz
+
+Gateway Pattern:
+  FMS is J1939 subset → Use J1939 adapter with FMS PGN filter configuration
+```
+
+**V2X (C-V2X / DSRC / IEEE 802.11p)** — Vehicle-to-Everything:
+```
+Purpose: Connected vehicles (safety, traffic management, autonomous driving)
+Market:  25% CAGR, European eCall/C-ITS mandates
+
+Technologies:
+  ├─ C-V2X (Cellular V2X): 3GPP Release 14+ PC5 sidelink (forward-looking)
+  ├─ DSRC (Dedicated Short-Range Communications): IEEE 802.11p / ETSI ITS-G5 (legacy)
+  └─ 5G NR-V2X: 3GPP Release 16+ (high bandwidth, low latency)
+
+Message Types (ASN.1 Encoding):
+  - BSM (Basic Safety Message / CAM): Vehicle position, speed, heading, accel (10 Hz)
+  - MAP: Intersection geometry (lanes, stop lines, crosswalks)
+  - SPaT: Signal Phase and Timing (traffic light state)
+  - DENM: Decentralized Environmental Notification Message (hazard warnings)
+
+Gateway Role:
+  - Receive V2X messages (OBU → Gateway)
+  - Parse ASN.1 (UPER encoding)
+  - Forward to traffic management center or fleet platform
+  - Map to LwM2M Object 6 (Location) + custom V2X objects
+```
+
+**NMEA 2000 / NMEA 0183** — Marine / Agricultural GPS:
+```
+NMEA 2000:
+  - Based on CAN 2.0B (250 kbps)
+  - PGN-based (similar to J1939)
+  - Common PGNs:
+    - PGN 129029: GNSS Position Data (lat, lon, altitude)
+    - PGN 130306: Wind Data (speed, direction)
+    - PGN 127488: Engine Parameters, Rapid Update
+    - PGN 127505: Fluid Level (fuel, water)
+
+NMEA 0183 (Legacy Serial):
+  - RS-422, 4800 baud
+  - ASCII sentences: $GPGGA (GPS fix), $GPRMC (recommended minimum), $GPVTG (track/speed)
+
+Gateway: Parse PGNs or NMEA sentences → LwM2M Object 6 (Location)
+```
+
+### 10.4 Additional Industrial / Enterprise Protocols
+
+**SNMP v2c/v3** — Network Equipment Monitoring:
+```
+Covered in device-management.md section 6, but relevant for gateway integration:
+  - Monitor gateway uptime, interface stats, system load
+  - SNMP traps for alerts (port down, high CPU, disk full)
+  - Integrate with enterprise NMS (Nagios, Zabbix, PRTG)
+```
+
+**WirelessHART / ISA100.11a** — Industrial Wireless Mesh:
+```
+Covered in pan-short-range.md, but gateway pattern:
+  - Gateway acts as WirelessHART/ISA100 Network Manager
+  - TDMA + DSSS on 2.4 GHz (IEEE 802.15.4)
+  - Maps process variables to Modbus/OPC UA northbound
+  - Cross-reference: [pan-short-range.md](pan-short-range.md)
+```
+
+**LoRaWAN** — Long-Range LPWAN:
+```
+Covered in lpwan.md section 2, but gateway role:
+  - LoRa Gateway (Concentrator IC like SX1301/SX1303)
+  - Packet Forwarder → Network Server (ChirpStack, The Things Network)
+  - Application Server decodes payloads → LwM2M/MQTT
+  - Cross-reference: [lpwan.md](lpwan.md)
+```
+
+**Sigfox** — Ultra-Narrowband LPWAN:
+```
+Covered in lpwan.md section 4
+  - Gateway forwards to Sigfox Cloud
+  - Callback API delivers payloads to application server
+  - Cross-reference: [lpwan.md](lpwan.md)
+```
+
+---
+
 ## Key Specification References
 
 | Technology      | Primary Spec                         | Publisher       | Year |
 |-----------------|--------------------------------------|-----------------|------|
-| Sparkplug B     | Eclipse Sparkplug B 1.0              | Eclipse         | 2016 |
+| Sparkplug B     | Eclipse Sparkplug B 1.0 / 3.0        | Eclipse         | 2016/2024 |
 | EdgeX Foundry   | EdgeX 3.0 (Minnesota)                | LF Edge         | 2023 |
 | Azure IoT Edge  | IoT Edge Runtime 1.4                 | Microsoft       | 2023 |
 | AWS Greengrass  | Greengrass Core v2.11                | AWS             | 2023 |
 | Eclipse Hono    | Hono 2.4                             | Eclipse         | 2023 |
 | OPC UA PubSub   | IEC 62541-14                         | OPC Foundation  | 2020 |
 | KNX IoT         | KNX IoT Point API Spec 1.0           | KNX Association | 2021 |
+| LwM2M Gateway   | OMA LwM2M v1.2 / v2.0                | OMA SpecWorks   | 2020/2026 |
+| DALI-2          | IEC 62386 (all parts)                | IEC             | 2014-2022 |
+| LonWorks        | EN 14908 (ISO/IEC 14908)             | Echelon/ISO     | 2012 |
+| EnOcean         | ISO 14543-3-1X                       | EnOcean Alliance| 2012-2020 |
+| SDI-12          | SDI-12 Version 1.4                   | SDI-12 Support  | 2016 |
+| ISOBUS          | ISO 11783 (all parts)                | ISO/AEF         | 2007-2019 |
+| SAE J1939       | SAE J1939 (J1939-71, -73, -81)       | SAE International| 2016 |
+| FMS Standard    | FMS Interface Specification v4       | ACEA            | 2018 |
+| C-V2X           | 3GPP Release 14/16 (PC5, NR-V2X)     | 3GPP            | 2017/2020 |
+| NMEA 2000       | NMEA 2000 Standard                   | NMEA            | 2012 |
+| NMEA 0183       | NMEA 0183 Version 4.11               | NMEA            | 2018 |
 
 ---
 
