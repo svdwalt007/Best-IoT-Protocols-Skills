@@ -887,40 +887,357 @@ Cross-reference: [lpwan.md](lpwan.md) section 1.4 (LwM2M Object Model).
 
 ---
 
-## 10. oneM2M Interworking (LwM2M IPE)
+## 10. oneM2M Platform (IoT Service Layer Standard)
 
-**Reference**: ETSI TS 118 114 (oneM2M Interworking with LwM2M)
+**Reference**: ETSI TS 118.1xx / ISO/IEC 30128 series (oneM2M Release 4/5)
 
-**Architecture**:
+**Purpose**: oneM2M is a comprehensive IoT platform standard providing a horizontal service layer between IoT applications and underlying connectivity protocols. It's the standardized equivalent of commercial IoT platforms (AWS IoT Core, Azure IoT Hub) — enabling vendor-neutral IoT deployments.
+
+**Standardization Bodies**: Joint standards initiative of 8 SDOs (ETSI, ARIB, ATIS, CCSA, TIA, TSDSI, TTA, TTC) — recognized globally
+
+**oneM2M Architecture**:
+
 ```
-LwM2M Device                 LwM2M IPE                   oneM2M CSE
-┌──────────────┐            ┌────────────────┐          ┌────────────────┐
-│ LwM2M Client │ CoAP/UDP   │ LwM2M Bootstrap│ HTTP/CoAP│ Common Services│
-│ (Endpoint)   │───────────>│ + Reg Server   │<────────>│ Entity (CSE)   │
-│              │ DTLS       │                │  mca ref │                │
-│ Object 3303  │            │ Resource Mapper│  point   │ AE (Application│
-│ (Temperature)│            │   └─ Translate │          │    Entity)     │
-└──────────────┘            │      to oneM2M │          │                │
-                            │      <container>│          │ Resource Tree  │
-                            └────────────────┘          │  /CSE/AE/Temp  │
-                                                        └────────────────┘
+┌────────────────────────────────────────────────────────────────┐
+│                    APPLICATION LAYER                           │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │ Application Entity (AE)                                 │   │
+│  │   - Smart City Dashboard, Fleet Management App         │   │
+│  │   - Analytics Engine, ML Inference                     │   │
+│  └──────────────────────┬──────────────────────────────────┘   │
+│                         │ Mca (Application Interface)          │
+├─────────────────────────▼──────────────────────────────────────┤
+│              COMMON SERVICES ENTITY (CSE)                      │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │ Common Service Functions (CSFs):                        │  │
+│  │   ├─ Registration (resource tree management)            │  │
+│  │   ├─ Discovery (query-based resource search)            │  │
+│  │   ├─ Subscription/Notification (event-driven)           │  │
+│  │   ├─ Data Management (container, contentInstance CRUD)  │  │
+│  │   ├─ Device Management (firmware update, reboot)        │  │
+│  │   ├─ Security (authentication, authorization, ACL)      │  │
+│  │   ├─ Group Management (bulk operations)                 │  │
+│  │   ├─ Location (geospatial queries, proximity search)    │  │
+│  │   └─ Semantics (ontology-based discovery, NGSI-LD)      │  │
+│  └──────────────────────────────────────────────────────────┘  │
+│                         │ Mcc (CSE-to-CSE)                      │
+├─────────────────────────▼──────────────────────────────────────┤
+│              NETWORK SERVICES LAYER                            │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │ Underlying Network Service Entity (NSE)                 │  │
+│  │   - Transport: HTTP, CoAP, MQTT, WebSocket              │  │
+│  │   - Security: TLS, DTLS, OSCORE                          │  │
+│  │   - Connectivity: Cellular, Wi-Fi, LoRaWAN, etc.        │  │
+│  └──────────────────────────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────────────┘
 ```
 
-**Mapping Example**:
+**Resource Model** (Hierarchical Tree):
+
 ```
-LwM2M: /3303/0/5700 (Temperature Sensor Value)
-  ↓
-oneM2M: /CSE001/AE_SensorGW/Container_Temp/ContentInstance_12345
+CSE (Common Services Entity)
+  ├─ <CSEBase> (root resource, CSE-ID: /CSE001)
+  │
+  ├─ <AE> (Application Entity: /CSE001/AE_SmartCityApp)
+  │  ├─ <container> (data storage: /CSE001/AE_SmartCityApp/Temperature)
+  │  │  ├─ <contentInstance> (timestamped sensor reading, immutable)
+  │  │  ├─ <contentInstance> (next reading)
+  │  │  └─ <subscription> (notify on new content)
+  │  │
+  │  ├─ <container> (Humidity)
+  │  ├─ <group> (Sensor_Group_ZoneA)
+  │  └─ <accessControlPolicy> (who can read/write this AE's resources)
+  │
+  ├─ <AE> (Device: /CSE001/AE_TempSensor01)
+  │  ├─ <container> (SensorData)
+  │  └─ <mgmtObj> (firmware version, battery, memory)
+  │
+  ├─ <node> (physical device representation)
+  │  └─ <mgmtObj> (device management: firmware, reboot, diagnostics)
+  │
+  └─ <remoteCSE> (federated CSE: /CSE001/CSE002_EdgeGateway)
+     └─ (resource tree of edge CSE)
+```
+
+**Reference Points** (Interfaces):
+
+| Ref Point | Connection | Transport | Use Case |
+|-----------|------------|-----------|----------|
+| **Mca** | AE ↔ CSE | HTTP, CoAP, MQTT, WebSocket | Application subscribes to sensor data, sends commands |
+| **Mcc** | CSE ↔ CSE | HTTP, CoAP | Federation (cloud CSE ↔ edge CSE), resource discovery across CSEs |
+| **Mcc'** | CSE ↔ CSE (different SP) | HTTP | Service Provider interworking (roaming) |
+| **Mcn** | CSE ↔ NSE | Protocol-specific | CSE uses underlying network (LTE, NB-IoT, Wi-Fi) |
+
+**Protocol Bindings**:
+
+```
+HTTP Binding (default):
+  - RESTful CRUD: POST (CREATE), GET (RETRIEVE), PUT (UPDATE), DELETE
+  - URL structure: http://{cse-host}:8080/~/CSE001/AE_App/Temp
+  - Content-Type: application/json, application/cbor, application/xml
+
+CoAP Binding:
+  - Lightweight for constrained devices
+  - DTLS security
+  - Observe for subscriptions (CoAP Observe → oneM2M <subscription>)
+
+MQTT Binding:
+  - Topic structure: /oneM2M/{operation}/{to}/{from}
+  - QoS 0/1 for telemetry vs commands
+  - Retained messages for device shadow (last-known-state)
+
+WebSocket Binding:
+  - Bi-directional for real-time applications
+  - Server-push notifications without polling
+```
+
+**CRUD Operations** (RESTful Semantics):
+
+```http
+CREATE <container>:
+  POST http://cse.example.com/~/CSE001/AE_App
+  Content-Type: application/json; ty=3
+  Body:
+  {
+    "m2m:cnt": {
+      "rn": "Temperature",  // Resource Name
+      "mni": 100,           // Max Number of Instances (auto-delete oldest)
+      "mbs": 10000          // Max Byte Size
+    }
+  }
+  Response: 2001 Created, Location: /CSE001/AE_App/Temperature
+
+CREATE <contentInstance> (sensor reading):
+  POST http://cse.example.com/~/CSE001/AE_App/Temperature
+  Content-Type: application/json; ty=4
+  Body:
   {
     "m2m:cin": {
-      "con": "23.5",  // sensor value
-      "cnf": "text/plain",
-      "lbl": ["temperature", "zone-A"]
+      "con": "23.5",        // Content (sensor value)
+      "cnf": "text/plain",  // Content Info (MIME type)
+      "lbl": ["zone-A", "floor-3"]  // Labels (semantic tags)
+    }
+  }
+  Response: 2001 Created, ri: /CSE001/AE_App/Temperature/cin_12345
+
+RETRIEVE <container> (latest data):
+  GET http://cse.example.com/~/CSE001/AE_App/Temperature/la
+  (la = latest contentInstance)
+  Response:
+  {
+    "m2m:cin": {
+      "ri": "cin_12345",
+      "ct": "20240115T103000",  // Creation Time
+      "con": "23.5"
+    }
+  }
+
+SUBSCRIBE to <container>:
+  POST http://cse.example.com/~/CSE001/AE_App/Temperature
+  Content-Type: application/json; ty=23
+  Body:
+  {
+    "m2m:sub": {
+      "rn": "TempAlertSub",
+      "nu": ["http://app.example.com/notify"],  // Notification URI
+      "enc": {  // Event Notification Criteria
+        "net": [3],  // Notification Event Type: 3 = Update of Resource
+        "om": {      // Operation Monitor
+          "ops": [1]  // 1 = CREATE operation
+        }
+      }
+    }
+  }
+  → When new <cin> created, CSE POSTs notification to http://app.example.com/notify
+
+DISCOVERY (find all temperature sensors in zone-A):
+  GET http://cse.example.com/~/CSE001?fu=1&ty=4&lbl=temperature&lbl=zone-A
+  (fu=1 = filterUsage: discovery, ty=4 = contentInstance, lbl = label match)
+  Response: List of URIs matching query
+```
+
+**Subscription/Notification**:
+
+```
+Notification Triggers:
+  ├─ CREATE of resource (new sensor reading)
+  ├─ UPDATE of attribute (device status change)
+  ├─ DELETE of resource (device deregistered)
+  ├─ Batch notification (collect N events before notify)
+  └─ Rate limit (notify at most once per X seconds)
+
+Notification Delivery:
+  ├─ HTTP POST to AE callback URL
+  ├─ CoAP CON message
+  ├─ MQTT publish to subscribed topic
+  └─ Blocking notification (wait for AE acknowledgment)
+
+Event Notification Content:
+  {
+    "m2m:sgn": {  // Notification
+      "nev": {    // Notification Event
+        "rep": {  // Representation (full resource or delta)
+          "m2m:cin": { "con": "24.1" }
+        },
+        "net": 3  // CREATE
+      },
+      "sur": "/CSE001/AE_App/Temperature/sub_001"  // Subscription URI
     }
   }
 ```
 
-**Benefits**: Allows LwM2M-native devices to participate in oneM2M ecosystems (smart city platforms, industrial IoT).
+**Security**:
+
+```
+Authentication:
+  ├─ M2M-Token (bearer token in HTTP header: X-M2M-Origin)
+  ├─ OAuth 2.0 (for AE ↔ CSE)
+  └─ Certificate-based (mTLS for CSE ↔ CSE)
+
+Authorization (Access Control Policies):
+  <accessControlPolicy>:
+    ├─ privileges: CREATE, RETRIEVE, UPDATE, DELETE, NOTIFY, DISCOVER
+    ├─ accessControlOriginators: [AE_ID list, wildcards]
+    └─ accessControlContexts: time-based, location-based
+
+Example:
+  {
+    "m2m:acp": {
+      "pv": {  // Privileges
+        "acr": [
+          {
+            "acor": ["AE_Admin", "AE_Analyst"],  // Origins
+            "acop": 63  // Binary: 111111 = all operations
+          },
+          {
+            "acor": ["AE_Viewer"],
+            "acop": 2  // Binary: 000010 = RETRIEVE only
+          }
+        ]
+      }
+    }
+  }
+
+Encryption:
+  ├─ TLS 1.3 for HTTP/WebSocket
+  ├─ DTLS 1.3 for CoAP
+  └─ End-to-end: Application-layer encryption in <cin> content field
+```
+
+**Device Management** (mgmtObj):
+
+```
+<node> resource represents physical device:
+  ├─ <mgmtObj> firmware
+  │  └─ version, URL, update, state (IDLE, DOWNLOADING, DOWNLOADED, UPDATING)
+  ├─ <mgmtObj> battery
+  │  └─ level, status (charging, discharging, full)
+  ├─ <mgmtObj> memory
+  │  └─ available, used
+  ├─ <mgmtObj> reboot
+  │  └─ trigger, factoryReset
+  └─ <mgmtObj> deviceInfo
+     └─ manufacturer, model, serialNumber, firmwareVersion
+
+Firmware Update Flow:
+  1. AE updates <firmware> mgmtObj with Package URL
+  2. <node> downloads firmware (state: DOWNLOADING)
+  3. <node> verifies signature (state: DOWNLOADED)
+  4. AE triggers update command (state: UPDATING)
+  5. <node> reboots, applies firmware
+  6. <node> reports new version (state: IDLE)
+```
+
+**Interworking with Other Protocols** (IPE — Interworking Proxy Entity):
+
+```
+LwM2M IPE (ETSI TS 118 114):
+  LwM2M Device (CoAP, Object 3303)
+    ↓ LwM2M IPE translates
+  oneM2M <container> + <contentInstance>
+
+MQTT IPE:
+  MQTT Device (topic: sensors/temp)
+    ↓ MQTT IPE translates
+  oneM2M <AE> + <container>
+
+HTTP IPE:
+  RESTful sensor (GET /api/temperature)
+    ↓ HTTP IPE polls and translates
+  oneM2M <contentInstance>
+
+Benefit: Heterogeneous devices unified under single oneM2M resource tree
+```
+
+**Semantic Interoperability** (oneM2M Base Ontology):
+
+```
+Ontology-based discovery using NGSI-LD:
+  - Device capabilities described via semantic tags
+  - Standardized vocabulary (SAREF, SSN/SOSA)
+  - Query: "Find all actuators controlling water valves in Building A"
+    → Returns resources with semantic annotations matching query
+
+Example Annotation:
+  <container> labeled with:
+    - schema:device = saref:TemperatureSensor
+    - schema:location = geo:Building_A_Floor_3
+    - schema:measuredProperty = qudt:Temperature
+```
+
+**Real-World Deployments**:
+
+```
+1. OCEAN (Open Connectome Engine) — Smart City Platform (South Korea)
+   ├─ 10M+ IoT devices (traffic, parking, environment)
+   ├─ oneM2M CSE at city level, edge CSEs at district level
+   └─ Multi-vendor device integration via IPEs
+
+2. FIWARE + oneM2M — European Smart City Deployments
+   ├─ FIWARE Context Broker ↔ oneM2M CSE integration
+   ├─ NGSI-LD semantic layer on top of oneM2M
+   └─ Cities: Santander, Aarhus, Helsinki
+
+3. KDDI IoT Platform (Japan) — Carrier-Grade oneM2M
+   ├─ NB-IoT devices → oneM2M CSE (LwM2M IPE)
+   ├─ 5M+ connected devices (utilities, logistics, agriculture)
+   └─ Multi-tenant CSE with operator-level federation
+
+4. AIUT (China) — Industrial IoT
+   ├─ Manufacturing execution systems (MES) via oneM2M
+   ├─ OPC UA IPE for PLC integration
+   └─ Cross-factory data federation via Mcc
+```
+
+**oneM2M vs Commercial IoT Platforms**:
+
+| Feature | oneM2M | AWS IoT Core | Azure IoT Hub |
+|---------|--------|--------------|---------------|
+| Standardization | SDO standard (vendor-neutral) | Proprietary | Proprietary |
+| Resource Model | Hierarchical tree (<AE>, <container>, <cin>) | Thing Shadow (JSON doc) | Device Twin (JSON doc) |
+| Federation | Native (Mcc reference point) | Cross-account roles (AWS-specific) | IoT Hub federation (Azure-specific) |
+| Protocol Support | HTTP, CoAP, MQTT, WebSocket (standard bindings) | MQTT, HTTPS, WebSocket | MQTT, AMQP, HTTPS |
+| Semantic Discovery | Native (ontology-based) | Via Lambda + Elasticsearch | Via Azure Digital Twins |
+| Device Management | mgmtObj (firmware, reboot, battery) | Jobs, Fleet Indexing | Device Twin desired/reported |
+| Deployment | Self-hosted or cloud | Cloud-only (AWS) | Cloud-only (Azure) |
+| Interoperability | IPEs for LwM2M, MQTT, HTTP, OPC UA | SDK-based (device-specific) | SDK-based (device-specific) |
+
+**Benefits of oneM2M**:
+- **Vendor Neutrality**: Avoid cloud provider lock-in; deploy on-premise, edge, or multi-cloud
+- **Horizontal Platform**: Single service layer across all IoT verticals (smart city, industrial, healthcare)
+- **Global Standard**: Recognized by EU, Asia-Pacific governments for public IoT infrastructure
+- **Longevity**: Standards-based architecture outlives proprietary platforms
+
+**oneM2M Release Roadmap**:
+```
+Release 1 (2014): Core architecture, HTTP/CoAP bindings
+Release 2 (2016): MQTT, semantics, interworking (LwM2M IPE)
+Release 3 (2018): Edge computing, cross-domain discovery
+Release 4 (2021): 5G integration, AI/ML at edge, time-series data
+Release 5 (2023-2024): Enhanced security, NGSI-LD alignment, blockchain integration
+```
+
+Cross-reference: [lpwan.md](lpwan.md) for LwM2M core protocol; [edge-gateway.md](edge-gateway.md) for IPE integration patterns; [data-encoding.md](data-encoding.md) for NGSI-LD and semantic models
 
 ---
 

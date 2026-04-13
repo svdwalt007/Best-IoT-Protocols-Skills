@@ -244,15 +244,232 @@ eIM ←→ IPAe: LwM2M Object 3443 (ASN.1 pipe relayed via device OS)
 2. As GSMA's ISO OID namespace identifier
 Never cite Object 146 as an eSIM LwM2M object.
 
-### SIM OTA (GSMA TS.02 / TS.03)
-Legacy OTA management of SIM card applications (Java Card applets) — predates SGP.32:
-- **GSMA TS.02:** Security requirements for OTA via SMS Bearer
-- **GSMA TS.03:** Requirements for OTA via BIP (Bearer Independent Protocol)
-- **SMS Bearer OTA:** Commands tunnelled in GSM SMS; SIM responds via SMS; SCP80 security
-- **BIP (Bearer Independent Protocol):** ETSI TS 102 127, 3GPP TS 31.111; commands over GPRS/LTE data bearer; SCP81 security; higher throughput than SMS OTA
-- **Commands:** OPEN CHANNEL, SEND DATA, RECEIVE DATA, CLOSE CHANNEL (proactive SIM commands)
-- **Key management:** Key Set Identifier (KSI) + OTA keys (TAR — Toolkit Application Reference identifies target applet)
-- **Status:** Still widely deployed for M2M SIM fleet management on legacy devices; being superseded by SGP.32
+### SIM OTA / BIP (Bearer Independent Protocol)
+**Reference**: GSMA TS.02/TS.03 (SIM OTA), ETSI TS 102 127 (BIP), ETSI TS 102 225 (SCP80/81/02), ETSI TS 102 223 (CAT)
+
+**Purpose**: Remote provisioning and management of SIM card applications (Java Card applets, file system updates) on deployed M2M SIMs — predates eSIM/SGP.32 but still deployed on millions of M2M devices
+
+**Two Delivery Mechanisms**:
+
+#### 1. SMS-PP OTA (SMS Point-to-Point)
+**Reference**: ETSI TS 102 225 (SCP80), 3GPP TS 23.040/31.115
+
+**Architecture**:
+```
+OTA Platform                   SMSC                    Device/SIM
+┌──────────────┐             ┌──────┐               ┌────────────┐
+│ OTA Server   │ SMS-MT      │ SMS  │   SMS-PP      │ SIM Card   │
+│  (UICC-OTA)  ├────────────>│Center├──────────────>│ (JavaCard) │
+│              │             └──────┘               │            │
+│ Key Mgmt     │                                    │ Applet     │
+│ (KIC/KID)    │             ┌──────┐               │ Processing │
+│              │<────────────┤ SMS  │<──────────────┤ (CAT)      │
+└──────────────┘ SMS-MO      └──────┘   Response    └────────────┘
+```
+
+**SMS-PP APDU Structure**:
+```
+SMS TPDU (TP-User-Data):
+  ├─ SPI (Security Parameter Indicator): 2 bytes
+  │  └─ Defines: Command type, cipher/MAC algorithm, key set
+  ├─ TAR (Toolkit Application Reference): 3 bytes
+  │  └─ Identifies target applet on SIM (e.g., 0xB00000 for Java Card applet)
+  ├─ CNTR (Counter): 5 bytes
+  │  └─ Anti-replay protection; incremented for each command
+  ├─ PCNTR (Padding Counter): 1 byte
+  │  └─ Length of padding to align to block size
+  ├─ RC/CC/DS (Response/Ciphering/Digital Signature): Variable
+  │  ├─ RC (Response Check): MAC over response (if requested)
+  │  ├─ CC (Cryptographic Checksum): MAC over command (integrity)
+  │  └─ DS (Digital Signature): Optional RSA signature
+  └─ Secured Data: Encrypted command payload (DES/3DES/AES-128)
+
+Security Levels (SPI):
+  ├─ No security (0x00): Plaintext, no MAC (testing only)
+  ├─ RC (Response Check): MAC on response
+  ├─ CC (Command Check): MAC on command
+  └─ RC+CC+Ciphering: Full security (encrypt+MAC command and response)
+```
+
+**SCP80 Key Hierarchy**:
+```
+Master Key (per SIM, provisioned at manufacturing)
+  ├─ KIC (Key for Integrity and Ciphering)
+  │  └─ Derives session keys for command encryption (DES/3DES/AES-128)
+  └─ KID (Key for Integrity and Deciphering)
+     └─ Derives session keys for MAC calculation (DES-MAC, AES-CMAC)
+
+Key Derivation (SCP80):
+  Session Key = KDF(Master Key, CNTR)
+  - CNTR increments for each OTA session
+  - Prevents key reuse; forward secrecy per session
+```
+
+**SMS-PP OTA Flow**:
+```
+1. OTA Server constructs secured APDU:
+   - Plaintext command (e.g., INSTALL [for load] Java Card applet)
+   - Encrypt with KIC session key (3DES-CBC or AES-128)
+   - Calculate MAC with KID session key (DES-MAC-8 or AES-CMAC)
+   - Assemble: SPI || TAR || CNTR || CC || Encrypted_Data
+
+2. OTA Server → SMSC: SMS-SUBMIT (TP-User-Data = Secured APDU)
+
+3. SMSC → Device: SMS-DELIVER (binary SMS, PID=0x7F for SIM data download)
+
+4. Device receives SMS → routes to SIM via SMS-PP envelope command
+
+5. SIM processes:
+   - Verify TAR (is this command for me?)
+   - Verify CNTR (is this fresher than last command? anti-replay)
+   - Decrypt command data with KIC
+   - Verify MAC with KID
+   - Execute command (applet install, file update, APDU execution)
+
+6. SIM generates response:
+   - Response status (0x9000 success, 0x6xxx error)
+   - Encrypt response with KIC
+   - Calculate MAC with KID
+   - Response APDU: SPI || TAR || CNTR || RC || Encrypted_Response
+
+7. Device → SMSC → OTA Server: SMS-MO (response APDU)
+
+8. OTA Server verifies response MAC, decrypts, confirms success
+```
+
+**Limitations**:
+- **Throughput**: SMS limited to 140 bytes per message; large applets require fragmentation (100+ SMS for typical applet)
+- **Latency**: SMS delivery not guaranteed real-time; minutes to hours
+- **Cost**: SMS charges per message (expensive for large updates)
+- **Coverage**: Requires SMS service (not available in some NB-IoT networks with NIDD-only)
+
+#### 2. BIP OTA (Bearer Independent Protocol over GPRS/LTE)
+**Reference**: ETSI TS 102 127 (BIP), 3GPP TS 31.111 (CAT — Card Application Toolkit), ETSI TS 102 225 (SCP81)
+
+**Purpose**: High-throughput OTA over IP bearer (GPRS, LTE, NB-IoT) — faster and cheaper than SMS
+
+**Architecture**:
+```
+OTA Platform                  TCP/IP Network           Device/SIM
+┌──────────────┐             ┌──────────────┐        ┌────────────┐
+│ OTA Server   │ TCP/IP      │ Packet Core  │ BIP    │ SIM Card   │
+│  (BIP-OTA)   ├────────────>│ (GGSN/PGW)   ├───────>│ (JavaCard) │
+│              │             └──────────────┘ Channel │            │
+│ SCP81 Keys   │                                      │ Proactive  │
+│ (KIC/KID)    │                                      │ SIM (CAT)  │
+└──────────────┘                                      └────────────┘
+```
+
+**BIP Proactive Commands** (SIM → Device, via CAT):
+```
+1. OPEN CHANNEL (0x40)
+   - SIM instructs device to open TCP/IP channel to OTA server
+   - Parameters: Destination IP, Port, Bearer (GPRS/LTE), Buffer size
+   - Device response: Channel ID (1-7, max 7 concurrent channels)
+
+2. SEND DATA (0x43)
+   - SIM sends data over open channel
+   - Payload: Secured APDU (SCP81-encrypted command)
+   - Device forwards data via TCP socket to OTA server
+
+3. RECEIVE DATA (0x42)
+   - SIM requests data from open channel
+   - Device fetches data from TCP socket
+   - Response: Secured APDU from OTA server (encrypted response)
+
+4. GET CHANNEL STATUS (0x44)
+   - SIM queries channel state (open, closed, bytes available)
+
+5. CLOSE CHANNEL (0x41)
+   - SIM closes TCP channel when session complete
+```
+
+**SCP81 Security** (BIP variant of SCP80):
+```
+Differences from SCP80:
+  - Optimized for packet data (larger MTU, no SMS fragmentation)
+  - Session-based: Single OPEN CHANNEL → multiple commands → CLOSE CHANNEL
+  - Same key hierarchy: KIC/KID derived from Master Key
+  - MAC calculation: AES-CMAC (SCP81) vs DES-MAC (SCP80)
+  - Counter: Session counter (per BIP session) vs SMS counter
+
+Advantages:
+  - Throughput: 10-100x faster than SMS (full TCP bandwidth)
+  - Cost: Data cost << SMS cost for large transfers
+  - Reliability: TCP ensures in-order delivery, retransmission
+```
+
+**BIP OTA Flow**:
+```
+1. OTA Server triggers BIP session (via SMS or previous BIP session)
+
+2. SIM issues OPEN CHANNEL proactive command:
+   Device → SIM: TERMINAL RESPONSE (channel ID = 1)
+
+3. SIM issues SEND DATA:
+   - SIM constructs secured APDU (SCP81: SPI || TAR || CNTR || CC || Encrypted_Command)
+   - Device sends data over TCP to OTA server
+
+4. OTA Server processes command, responds via TCP
+
+5. SIM issues RECEIVE DATA:
+   - Device fetches response from TCP socket
+   - SIM decrypts, verifies MAC, executes command
+
+6. Repeat SEND DATA / RECEIVE DATA for multi-command session
+
+7. SIM issues CLOSE CHANNEL when complete
+
+8. OTA Server confirms all commands executed successfully
+```
+
+**BIP Use Cases**:
+```
+1. Java Card Applet Download (100-500 KB)
+   - SMS OTA: 1000+ SMS messages → hours, expensive
+   - BIP OTA: 10-30 seconds → single data session, cheap
+
+2. SIM File System Update (EF_SMS, EF_MSISDN, phonebook)
+   - Bulk updates to SIM file system
+   - BIP allows atomic multi-file updates in single session
+
+3. SIM Application Management (Install, Delete, Lock applets)
+   - GP (GlobalPlatform) INSTALL/DELETE/LOCK commands
+   - BIP enables full lifecycle management
+
+4. OTA Key Rotation
+   - Update KIC/KID keys remotely
+   - SCP81 key diversification commands
+```
+
+**CAT (Card Application Toolkit) Integration**:
+```
+ETSI TS 102 223 — Proactive SIM interface:
+  - SET UP CALL: SIM-initiated voice call (legacy M2M)
+  - SEND SMS: SIM-initiated SMS (alerts, telemetry)
+  - DISPLAY TEXT: SIM-controlled UI messages
+  - OPEN CHANNEL: BIP TCP/IP (OTA, telemetry)
+  - PROVIDE LOCAL INFORMATION: SIM requests device state (IMEI, location, battery)
+
+CAT enables SIM to act as intelligent agent:
+  - Autonomous network connection (no app needed)
+  - Telemetry reporting (SIM reads device sensors → SEND DATA)
+  - Remote management (OTA server controls SIM → controls device)
+```
+
+**SIM OTA vs eSIM (SGP.32)**:
+```
+Feature                | SIM OTA (SMS/BIP)         | eSIM (SGP.32)
+-----------------------|---------------------------|---------------------------
+Profile Management     | Applet updates only       | Full profile swap (MNO change)
+Security               | SCP80/81 (DES/3DES/AES)  | TLS + eUICC certificates
+Bootstrap              | Master key at manufacture | EID + RSP architecture
+Use Case               | M2M fleet management      | Consumer + M2M (future)
+Deployment             | 100M+ M2M SIMs (legacy)   | 1B+ consumer phones, growing M2M
+Standard Body          | GSMA + ETSI               | GSMA (SGP.22 for M2M, SGP.32 for IoT)
+```
+
+**Status**: SIM OTA (SMS-PP and BIP) still widely deployed for legacy M2M device fleets (automotive, industrial IoT, smart meters manufactured pre-2020). New deployments favor eSIM (SGP.32) for multi-MNO support and future-proofing.
 
 ---
 
@@ -335,12 +552,131 @@ Mandatory for products with digital elements sold in EU (enforcement from 2027, 
 - **Requirements:** Security by design, no default passwords, vulnerability handling, SBOM, disclosure within 24h of exploitation
 - **Impact:** Affects all wireless IoT device manufacturers selling in EU
 
+### ETSI EN 303 645 — Consumer IoT Security
+**Reference**: ETSI EN 303 645 V2.1.1 (2020) — Cyber Security for Consumer Internet of Things: Baseline Requirements
+
+**Status**: Foundational consumer IoT security standard; harmonised under EU RED Article 3.3; basis for UK PSTI Act 2023
+
+**13 High-Level Security Provisions**:
+
+1. **No universal default passwords** — Devices must not ship with default passwords that are universal across all devices; each device must have unique credentials or force password setup during commissioning
+
+2. **Vulnerability disclosure policy** — Manufacturer must provide a public contact point (security@example.com) for vulnerability reporting; acknowledge reports within defined timeframe
+
+3. **Software update mechanism** — Secure update mechanism must be implemented; updates signed and verified; users notified of critical security updates
+
+4. **Secure credential storage** — Cryptographic credentials stored securely; hard-coded credentials prohibited; use hardware root of trust where applicable
+
+5. **Secure communications** — Sensitive security parameters communicated securely (TLS/DTLS); state-of-the-art encryption
+
+6. **Minimize attack surface** — Unused network services, ports, and functionality disabled by default; principle of least privilege
+
+7. **Software integrity and authenticity** — Firmware and software updates verified before installation; secure boot where applicable
+
+8. **Personal data protection** — Compliance with GDPR; data minimization; user consent for data collection
+
+9. **Resilience to outages** — Devices remain functional when cloud backend is unavailable; local operation where feasible
+
+10. **Examine system telemetry** — Security event logging; audit trails for forensic analysis; log protection
+
+11. **Easy device deletion** — User-initiated factory reset; data wiping mechanism; clear instructions
+
+12. **Installation and maintenance** — Secure installation guidance; no assumption of secure network environment
+
+13. **Input data validation** — Validate all input (user, network, sensors); sanitize to prevent injection attacks
+
+**Implementation Mapping**:
+```
+Provision 1 (No default passwords):
+  ├─ Matter commissioning: SPAKE2+ setup code per device
+  ├─ LwM2M Bootstrap: Unique PSK per endpoint
+  └─ MQTT: TLS client certificates (unique per device)
+
+Provision 3 (Software updates):
+  ├─ LwM2M Object 5 (Firmware Update) with Package URI verification
+  ├─ SUIT manifest (RFC 9019) for firmware integrity
+  └─ DFU over BLE: signed firmware images
+
+Provision 4 (Credential storage):
+  ├─ TPM 2.0 for certificate storage
+  ├─ Secure Element (ATECC608, SE050) for private keys
+  └─ ARM TrustZone for key isolation
+
+Provision 5 (Secure communications):
+  ├─ DTLS 1.3 for CoAP/LwM2M
+  ├─ TLS 1.3 for MQTT/HTTPS
+  └─ OSCORE for end-to-end application security
+```
+
+**Certification**: Not mandatory certification program, but compliance required for UK market (PSTI Act) and EU market (RED Article 3.3 delegated act)
+
+**Cross-reference**: See [lpwan.md](lpwan.md) for LwM2M security object implementation; [pan-short-range.md](pan-short-range.md) for Matter/BLE commissioning security
+
+---
+
+### UK PSTI Act 2023
+**Reference**: UK Product Security and Telecommunications Infrastructure Act 2023 (Mandatory from April 2024)
+
+**Scope**: Consumer "connectable products" (IoT devices that connect to internet or local network) sold in UK market
+
+**Three Core Requirements**:
+
+1. **Ban on universal default passwords** (Section 1)
+   - No device may have a factory default password that is:
+     - The same for all instances of the product
+     - Common and publicly available (e.g., "admin", "password", "12345")
+   - Enforcement: Product cannot be sold in UK without unique credentials or forced password change
+
+2. **Vulnerability disclosure policy** (Section 2)
+   - Manufacturer must publish a contact point for security researchers to report vulnerabilities
+   - Contact must be easily discoverable (e.g., security.txt RFC 9116, CERT/CC disclosure)
+   - Timeframe for acknowledgment: Reasonable response expected
+
+3. **Minimum security update period** (Section 3)
+   - Manufacturer must define and publish a "defined support period" for security updates
+   - Support period communicated at point of sale
+   - Minimum period not specified in Act (left to secondary legislation); industry best practice: 5 years for consumer products
+
+**Penalties**:
+- Civil: Up to £10 million or 4% of global turnover (whichever is higher)
+- Criminal: Up to £20,000 fine for summary conviction; unlimited for indictment
+
+**Enforcement**: Office for Product Safety and Standards (OPSS)
+
+**Relationship to ETSI EN 303 645**:
+```
+PSTI Act Requirements → ETSI EN 303 645 Provisions
+  ├─ Section 1 (No default passwords) → Provision 1
+  ├─ Section 2 (Vulnerability disclosure) → Provision 2
+  └─ Section 3 (Security updates) → Provision 3
+
+ETSI EN 303 645 compliance demonstrates PSTI Act conformity
+Additional 10 ETSI provisions (4-13) go beyond PSTI minimum requirements
+```
+
+**Impact for IoT Manufacturers**:
+- Any consumer IoT device sold in UK must comply (smart home, wearables, toys)
+- B2B IoT devices exempt (industrial sensors, building automation)
+- Applies to devices sold online to UK consumers (cross-border enforcement)
+
+---
+
 ### EU Radio Equipment Directive Article 3.3 (RED)
-Mandatory cybersecurity requirements for radio devices in EU (from August 2025):
-- **Article 3.3(d):** Network protection — devices must not harm the network
-- **Article 3.3(e):** Privacy safeguards — personal data protection
-- **Article 3.3(f):** Fraud prevention — consumer protection features
-- **Standards:** ETSI EN 303 645, IEC 62443 may be used for compliance
+**Reference**: Delegated Act 2022/30/EU under Radio Equipment Directive 2014/53/EU (Enforcement from August 2025)
+
+Mandatory cybersecurity requirements for radio devices in EU:
+- **Article 3.3(d):** Network protection — devices must not harm the network (DoS protection, no default credentials)
+- **Article 3.3(e):** Privacy safeguards — personal data protection (GDPR alignment, encryption of personal data)
+- **Article 3.3(f):** Fraud prevention — consumer protection features (payment transaction security, caller ID authentication)
+
+**Harmonised Standards**:
+- ETSI EN 303 645 (consumer IoT baseline requirements)
+- IEC 62443 (industrial IoT security)
+- ETSI TS 103 701 (cybersecurity for cellular IoT)
+
+**Compliance Demonstration**: Manufacturers must provide technical documentation showing conformity; CE marking requires RED Article 3.3 compliance alongside EMC/RF requirements
+
+**Difference from PSTI Act**: RED applies to all radio devices (B2C and B2B); PSTI Act targets consumer products only
 
 ### EU Battery Passport (EU 2023/1542)
 From 2027, mandatory digital battery passport for EV, LMT, and industrial batteries >2kWh:
