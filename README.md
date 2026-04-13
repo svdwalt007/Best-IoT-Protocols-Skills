@@ -33,6 +33,57 @@
 
 <br>
 
+<!-- ============================================================ -->
+<!--              PLATFORM & TOOL LOGOS                             -->
+<!-- ============================================================ -->
+
+<p>
+  <a href="https://www.anthropic.com"><img src="https://img.shields.io/badge/Anthropic-191919?style=for-the-badge&logo=anthropic&logoColor=white" alt="Anthropic"></a>&nbsp;
+  <a href="https://claude.ai"><img src="https://img.shields.io/badge/Claude.ai-D97757?style=for-the-badge&logo=anthropic&logoColor=white" alt="Claude.ai"></a>&nbsp;
+  <a href="https://claude.ai/code"><img src="https://img.shields.io/badge/Claude_Code-6B4FBB?style=for-the-badge&logo=anthropic&logoColor=white" alt="Claude Code"></a>&nbsp;
+  <a href="https://claude.ai"><img src="https://img.shields.io/badge/Claude_Cowork-2D9CDB?style=for-the-badge&logo=anthropic&logoColor=white" alt="Claude Cowork"></a>&nbsp;
+  <a href="https://github.com/anthropics"><img src="https://img.shields.io/badge/OpenClaw-FF6B35?style=for-the-badge&logo=opensourceinitiative&logoColor=white" alt="OpenClaw"></a>
+</p>
+
+<!-- ============================================================ -->
+<!--              STANDARDS BODY BADGES                             -->
+<!-- ============================================================ -->
+
+<p>
+  <a href="https://www.3gpp.org/"><img src="https://img.shields.io/badge/3GPP-0050A0?style=for-the-badge&logo=3gpp&logoColor=white" alt="3GPP"></a>&nbsp;
+  <a href="https://www.gsma.com/"><img src="https://img.shields.io/badge/GSMA-ED1C24?style=for-the-badge&logo=gsma&logoColor=white" alt="GSMA"></a>&nbsp;
+  <a href="https://omaspecworks.org/"><img src="https://img.shields.io/badge/OMA_SpecWorks-00B4D8?style=for-the-badge&logo=opensourceinitiative&logoColor=white" alt="OMA SpecWorks"></a>&nbsp;
+  <a href="https://www.ieee.org/"><img src="https://img.shields.io/badge/IEEE-00629B?style=for-the-badge&logo=ieee&logoColor=white" alt="IEEE"></a>&nbsp;
+  <a href="https://www.ietf.org/"><img src="https://img.shields.io/badge/IETF-005A9C?style=for-the-badge&logo=ietf&logoColor=white" alt="IETF"></a>
+</p>
+
+<p>
+  <a href="https://www.iec.ch/"><img src="https://img.shields.io/badge/IEC-003087?style=for-the-badge&logo=opensourceinitiative&logoColor=white" alt="IEC"></a>&nbsp;
+  <a href="https://www.etsi.org/"><img src="https://img.shields.io/badge/ETSI-FF6600?style=for-the-badge&logo=opensourceinitiative&logoColor=white" alt="ETSI"></a>&nbsp;
+  <a href="https://www.broadband-forum.org/"><img src="https://img.shields.io/badge/Broadband_Forum-0072C6?style=for-the-badge&logo=opensourceinitiative&logoColor=white" alt="BBF"></a>&nbsp;
+  <a href="https://csa-iot.org/"><img src="https://img.shields.io/badge/CSA-Matter-6DB33F?style=for-the-badge&logo=opensourceinitiative&logoColor=white" alt="CSA"></a>&nbsp;
+  <a href="https://lora-alliance.org/"><img src="https://img.shields.io/badge/LoRa_Alliance-000000?style=for-the-badge&logo=opensourceinitiative&logoColor=white" alt="LoRa Alliance"></a>
+</p>
+
+<br>
+
+<!-- ============================================================ -->
+<!--                   TECHNOLOGY BADGES                           -->
+<!-- ============================================================ -->
+
+[![IoT](https://img.shields.io/badge/IoT-Protocols-00979D?style=flat-square&logo=arduino&logoColor=white)](#)
+[![MQTT](https://img.shields.io/badge/MQTT-v3.1.1%20%2F%20v5.0-660066?style=flat-square)](#protocol-coverage)
+[![CoAP](https://img.shields.io/badge/CoAP-RFC_7252%20%2B_8323-007ACC?style=flat-square)](#protocol-coverage)
+[![DTLS](https://img.shields.io/badge/DTLS-CID_RFC_9146-4A90D9?style=flat-square)](#critical-notes-embedded-in-this-skill)
+[![LoRaWAN](https://img.shields.io/badge/LoRaWAN-v1.0%20%2F%20v1.1-E85D04?style=flat-square)](#protocol-coverage)
+[![NB--IoT](https://img.shields.io/badge/NB--IoT-PSM%20%2F%20eDRX%20%2F%20NIDD-5C2D91?style=flat-square)](#protocol-coverage)
+[![5G_NR](https://img.shields.io/badge/5G_NR-NSA%20%2F%20SA-E44D26?style=flat-square)](#protocol-coverage)
+[![OPC_UA](https://img.shields.io/badge/OPC_UA-IEC_62541-0078D4?style=flat-square)](#protocol-coverage)
+[![Matter](https://img.shields.io/badge/Matter-1.x-3DDC84?style=flat-square)](#protocol-coverage)
+[![LwM2M](https://img.shields.io/badge/LwM2M-cross--ref-00B4D8?style=flat-square)](https://github.com/svdwalt007/Best-LwM2M-Agentic-Skills)
+
+---
+
 <sub>OMA SpecWorks® — referenced under fair use for standards documentation.</sub><br>
 <sub>3GPP® is a registered trademark of ETSI — referenced under fair use for standards interoperability documentation.</sub><br>
 <sub>GSMA® is a registered trademark of the GSM Association — referenced under fair use for eSIM/RSP standards documentation.</sub><br>
@@ -141,35 +192,75 @@ This skill is part of a family of complementary IoT protocol skills:
 
 These demonstrate the kind of expert-level questions this skill handles:
 
-**LPWAN & Smart Metering:**
-> *"We're deploying 50,000 NB-IoT water meters in a European city. Compare wM-Bus OMS EN 13757-4 vs NB-IoT direct for the RF transport layer. What protocols pair best with DLMS/COSEM at the application layer?"*
+<details>
+<summary><strong>LPWAN &amp; Smart Metering</strong></summary>
 
-**Security & eSIM:**
-> *"Explain DTLS CID (RFC 9146) and why extension type 53 vs 54 matters for NB-IoT device session persistence. Also walk me through SGP.32 IPAd vs IPAe and which Objects (504, 3443) are used in LwM2M-based eSIM management."*
+> "We're deploying 50,000 NB-IoT water meters in a European city. Compare wM-Bus OMS EN 13757-4 vs NB-IoT direct for the RF transport layer. What protocols pair best with DLMS/COSEM at the application layer?"
 
-**Industrial OT Migration:**
-> *"We're migrating a PROFINET + Modbus TCP factory floor to OPC UA FX over TSN. Walk me through the architecture, which OPC UA Companion Specs apply for our packaging machines (PackML), and what IEC 62443 security levels we need."*
+</details>
 
-**EV Charging:**
-> *"Compare OCPP 2.0.1, ISO 15118-20 (V2G with Plug & Charge), and UNECE WP.29 R156 obligations. How do they interact for a smart charging station with bidirectional V2G capability?"*
+<details>
+<summary><strong>Security &amp; eSIM</strong></summary>
 
-**Matter Commissioning:**
-> *"Explain Matter's PASE and CASE commissioning flows step by step — BLE discriminator, SPAKE2+, Network Credential Transfer, CASE with NOC/ICAC/RCAC, and how the fabric model enables multi-controller setups."*
+> "Explain DTLS CID (RFC 9146) and why extension type 53 vs 54 matters for NB-IoT device session persistence. Also walk me through SGP.32 IPAd vs IPAe and which Objects (504, 3443) are used in LwM2M-based eSIM management."
 
-**Healthcare IoT:**
-> *"We're building a continuous glucose monitor for EU market. Map IEEE 11073-10417 to HL7 FHIR Observation resources, and identify the regulatory requirements (EU MDR, IEC 62304, IEC 62443 for cybersecurity)."*
+</details>
 
-**Smart Energy:**
-> *"A UK utility is deploying SMETS2 meters. Explain the GBCS message format, ZigBee SEP 1.x HAN, DCC WAN architecture, and how DLMS/COSEM is used. Compare with G3-PLC used in France's Linky deployment."*
+<details>
+<summary><strong>Industrial OT Migration</strong></summary>
 
-**5G SCEF/NEF:**
-> *"Explain the difference between 3GPP SCEF (Rel-13) and NEF (5G Rel-15+). How does the NIDD API work for non-IP NB-IoT devices, and how does Device Triggering (TS 23.682) wake a PSM-sleeping device?"*
+> "We're migrating a PROFINET + Modbus TCP factory floor to OPC UA FX over TSN. Walk me through the architecture, which OPC UA Companion Specs apply for our packaging machines (PackML), and what IEC 62443 security levels we need."
 
-**CoAP Deep Dive:**
-> *"Walk me through all the CoAP RFCs I need for a robust LwM2M-style IoT deployment: RFC 7252, 7641 Observe, 8323 TCP binding, 9175 Echo/Request-Tag, 9177 Q-Block, and group communication (RFC 7390). Which ones are mandatory vs optional?"*
+</details>
 
-**Regulatory Compliance:**
-> *"Our IoT device ships to EU. What does EU CRA compliance require? What about RED Article 3.3? When do they apply, and which ETSI/IEC standards can we use for conformance?"*
+<details>
+<summary><strong>EV Charging</strong></summary>
+
+> "Compare OCPP 2.0.1, ISO 15118-20 (V2G with Plug & Charge), and UNECE WP.29 R156 obligations. How do they interact for a smart charging station with bidirectional V2G capability?"
+
+</details>
+
+<details>
+<summary><strong>Matter Commissioning</strong></summary>
+
+> "Explain Matter's PASE and CASE commissioning flows step by step — BLE discriminator, SPAKE2+, Network Credential Transfer, CASE with NOC/ICAC/RCAC, and how the fabric model enables multi-controller setups."
+
+</details>
+
+<details>
+<summary><strong>Healthcare IoT</strong></summary>
+
+> "We're building a continuous glucose monitor for EU market. Map IEEE 11073-10417 to HL7 FHIR Observation resources, and identify the regulatory requirements (EU MDR, IEC 62304, IEC 62443 for cybersecurity)."
+
+</details>
+
+<details>
+<summary><strong>Smart Energy / SMETS2</strong></summary>
+
+> "A UK utility is deploying SMETS2 meters. Explain the GBCS message format, ZigBee SEP 1.x HAN, DCC WAN architecture, and how DLMS/COSEM is used. Compare with G3-PLC used in France's Linky deployment."
+
+</details>
+
+<details>
+<summary><strong>5G SCEF/NEF</strong></summary>
+
+> "Explain the difference between 3GPP SCEF (Rel-13) and NEF (5G Rel-15+). How does the NIDD API work for non-IP NB-IoT devices, and how does Device Triggering (TS 23.682) wake a PSM-sleeping device?"
+
+</details>
+
+<details>
+<summary><strong>CoAP Deep Dive</strong></summary>
+
+> "Walk me through all the CoAP RFCs I need for a robust LwM2M-style IoT deployment: RFC 7252, 7641 Observe, 8323 TCP binding, 9175 Echo/Request-Tag, 9177 Q-Block, and group communication (RFC 7390). Which ones are mandatory vs optional?"
+
+</details>
+
+<details>
+<summary><strong>EU Regulatory Compliance (CRA + RED)</strong></summary>
+
+> "Our IoT device ships to EU. What does EU CRA compliance require? What about RED Article 3.3? When do they apply, and which ETSI/IEC standards can we use for conformance?"
+
+</details>
 
 ---
 
@@ -252,9 +343,26 @@ Protocol knowledge synthesised from:
 - [ETSI](https://www.etsi.org/) — MIOTY (TS 103 357), DECT NR+ (DECT-2020), EN 13757 wM-Bus
 - [OCA (Open Charge Alliance)](https://www.openchargealliance.org/) — OCPP
 
+## Star History
+
+<div align="center">
+
+[![Star History Chart](https://api.star-history.com/svg?repos=svdwalt007/Best-IoT-Protocols-Skills&type=Date)](https://star-history.com/#svdwalt007/Best-IoT-Protocols-Skills&Date)
+
+</div>
+
 ---
 
 <div align="center">
-<sub>Built with ❤️ for the global IoT engineering community</sub><br>
-<sub>© 2026 Sean van der Walt — Apache 2.0 Licensed</sub>
+
+**Built with care by [Sean van der Walt](https://github.com/svdwalt007) — [Walt Technologies](https://github.com/svdwalt007)**
+
+<br>
+
+<sub>If this skill helps your IoT projects, consider giving it a ⭐ — it helps others discover it!</sub>
+
+<br>
+
+<a href="https://www.anthropic.com"><img src="https://img.shields.io/badge/Powered_by-Anthropic_Claude-D97757?style=flat-square&logo=anthropic&logoColor=white" alt="Powered by Anthropic Claude"></a>
+
 </div>
